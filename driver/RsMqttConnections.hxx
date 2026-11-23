@@ -49,6 +49,15 @@ class RsMqttConnection
     std::string     clientId;         // as configured; host 2 connects with "<clientId>_2"
     bool            reduClientId = false;  // redu.clientId given: host 2 uses it as it is
     std::string     spbHostId;        // sparkplug.hostId: STATE messages and will of the host application
+    std::string     spbReduHostId;    // redu.sparkplug.hostId: the second redundant host's own host id
+    bool            willTopicSet = false;  // a will is configured (replaced by the STATE will)
+
+    /// The host id this driver publishes STATE for ("" for none). Two
+    /// redundant drivers must not share one: each has its own will and STATE
+    /// timestamp, and edge nodes ignore STATE older than the last one. So
+    /// host 1 uses sparkplug.hostId and host 2 only redu.sparkplug.hostId
+    /// (without it, host 2 reads and writes but is no primary host).
+    const std::string &spbStateHost() const;
     int             persistence = -1; // explicit persistence=: -1 not set, 0 none/memory, 1 file
     bool            persistenceDirSet = false;
     std::string     persistenceDir;
@@ -104,7 +113,8 @@ class RsMqttConnection
       int  qos = 0;
       int  flags = 0;
       bool matching = false;                // wildcard / shared filter
-      bool sparkplug = false;               // an edge node's filter: messages go to `spb`
+      int  sparkplugRefs = 0;               // Sparkplug addresses on this edge node's filter: messages go to `spb`
+                                            // (other addresses on the same filter get the raw payload)
       std::map<std::string, int> addresses; // full address -> reference count
 
       /// How a message is handed to the addresses: built from `addresses`

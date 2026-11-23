@@ -73,10 +73,20 @@ void RsMqttConnection::noteOption(const std::string &name, const std::string &va
     persistenceDirSet = true;
     persistenceDir = trimmed(value);
   }
+  else if ( n == "will.topic" )
+    willTopicSet = !trimmed(value).empty();
 }
 
 void RsMqttConnection::applyReduOption(const std::string &option, const std::string &value)
 {
+  if ( normalizedOptionName(trimmed(option)) == "sparkplug.hostid" )
+  {
+    std::string id = trimmed(value);
+    if ( !id.empty() && !RsMqttSparkplug::validId(id) )
+      throw rsmqtt::Error(RSMQTT_INVALID_ARGUMENT, "redu.sparkplug.hostId must not contain / + #");
+    spbReduHostId = id;  // used on host 2 only (spbStateHost)
+    return;
+  }
   if ( !rsmqtt::Options::isKnown(option) )
     throw rsmqtt::Error(RSMQTT_UNKNOWN_OPTION, "unknown option 'redu." + option + "'");
   if ( !RsMqttRedu::isHost2() )
@@ -87,15 +97,23 @@ void RsMqttConnection::applyReduOption(const std::string &option, const std::str
     reduClientId = true;
 }
 
+const std::string &RsMqttConnection::spbStateHost() const
+{
+  return RsMqttRedu::isHost2() ? spbReduHostId : spbHostId;
+}
+
 rsmqtt::Options RsMqttConnection::clientOptions() const
 {
   rsmqtt::Options o = options;
   // Sparkplug host application: its STATE turns offline with the will
-  if ( !spbHostId.empty() )
+  if ( !spbStateHost().empty() )
   {
+    if ( willTopicSet )
+      logError(ErrClass::PRIO_WARNING, "clientOptions",
+               "[" + name + "] sparkplug.hostId: the configured will is replaced by the STATE will of the host application");
     spbStateTs = std::chrono::duration_cast<std::chrono::milliseconds>(
                    std::chrono::system_clock::now().time_since_epoch()).count();
-    o.set("will.topic", RsMqttSparkplug::stateTopic(spbHostId))
+    o.set("will.topic", RsMqttSparkplug::stateTopic(spbStateHost()))
      .set("will.payload", RsMqttSparkplug::statePayload(false, spbStateTs))
      .set("will.qos", 1)
      .set("will.retained", true);
@@ -170,6 +188,8 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
     clientId = defaultClientId(name);
     reduClientId = false;
     spbHostId.clear();
+    spbReduHostId.clear();
+    willTopicSet = !cfg.willTopic.empty();
     persistence = -1;
     persistenceDirSet = false;
     persistenceDir.clear();
@@ -509,7 +529,7 @@ bool RsMqttConnections::addAddress(const std::string &fullAddress, const RsMqttA
   sub.planDirty = true;
   if ( addr.sparkplug )
   {
-    sub.sparkplug = true;
+    sub.sparkplugRefs++;
     if ( input )
       conn->spbIndex[RsMqttConnection::spbKey(addr)][fullAddress]++;
   }
@@ -566,8 +586,13 @@ bool RsMqttConnections::removeAddress(const std::string &fullAddress, const RsMq
   if ( s == conn->subscriptions.end() )
     return last;
   auto a = s->second.addresses.find(fullAddress);
-  if ( a != s->second.addresses.end() && --a->second == 0 )
-    s->second.addresses.erase(a);
+  if ( a != s->second.addresses.end() )
+  {
+    if ( addr.sparkplug && s->second.sparkplugRefs > 0 )
+      s->second.sparkplugRefs--;
+    if ( --a->second == 0 )
+      s->second.addresses.erase(a);
+  }
   s->second.planDirty = true;
   if ( s->second.addresses.empty() )
   {

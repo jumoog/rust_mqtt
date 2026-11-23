@@ -431,6 +431,14 @@ pub struct RsmqttWinccSpbHost {
 }
 
 impl RsmqttWinccSpbHost {
+    /// Before each call: a call that fails (panic) must not leave the
+    /// results of the previous one to be applied again.
+    fn forget(&mut self) {
+        self.updates.clear();
+        self.publish.clear();
+        self.warnings.clear();
+    }
+
     fn keep(&mut self, o: sparkplug::Outcome) {
         self.updates = o
             .updates
@@ -473,6 +481,7 @@ pub unsafe extern "C" fn rsmqtt_wincc_spb_on_message(
 ) {
     guard((), || {
         let h = h.as_mut().ok_or("null host")?;
+        h.forget();
         let o = h.host.on_message(&text(topic), bytes(payload, len), now_ms);
         h.keep(o);
         Ok(())
@@ -484,6 +493,7 @@ pub unsafe extern "C" fn rsmqtt_wincc_spb_on_message(
 pub unsafe extern "C" fn rsmqtt_wincc_spb_connection_lost(h: *mut RsmqttWinccSpbHost) {
     guard((), || {
         let h = h.as_mut().ok_or("null host")?;
+        h.forget();
         let o = h.host.on_connection_lost();
         h.keep(o);
         Ok(())

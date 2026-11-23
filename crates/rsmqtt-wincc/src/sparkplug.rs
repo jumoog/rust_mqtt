@@ -132,6 +132,17 @@ fn is_unsigned(t: u32) -> bool {
     matches!(t, UINT8 | UINT16 | UINT32 | UINT64)
 }
 
+/// A signed int_value: two's complement in the type's own width. Edge nodes
+/// store Int8 -23 either sign-extended (0xFFFFFFE9) or in 8 bits (0xE9, as
+/// Tahu does for Sparkplug 3.0); cutting to the width reads both.
+fn signed_int(t: u32, x: u32) -> i64 {
+    match t {
+        INT8 => x as u8 as i8 as i64,
+        INT16 => x as u16 as i16 as i64,
+        _ => x as i32 as i64,
+    }
+}
+
 fn element_size(t: u32) -> usize {
     match t {
         INT8_ARRAY | UINT8_ARRAY => 1,
@@ -176,7 +187,7 @@ fn array_text(t: u32, b: &[u8]) -> Result<Vec<u8>, String> {
         if n == 0 {
             return Err(format!("unsupported array type {}", data_type_name(t)));
         }
-        if b.len() % n != 0 {
+        if !b.len().is_multiple_of(n) {
             return Err(format!("{} of {} bytes", data_type_name(t), b.len()));
         }
         for c in b.chunks(n) {
@@ -208,7 +219,7 @@ fn array_text(t: u32, b: &[u8]) -> Result<Vec<u8>, String> {
 fn json_scalar(t: u32, int: Option<u32>, long: Option<u64>, f: Option<f32>, d: Option<f64>, b: Option<bool>, s: Option<&str>) -> Vec<u8> {
     let num = |x: String| x.into_bytes();
     if let Some(v) = int {
-        return num(if is_signed(t) { (v as i32).to_string() } else { v.to_string() });
+        return num(if is_signed(t) { signed_int(t, v).to_string() } else { v.to_string() });
     }
     if let Some(v) = long {
         return num(if is_signed(t) || t == DATETIME { (v as i64).to_string() } else { v.to_string() });
@@ -330,7 +341,7 @@ pub fn value_text(m: &Metric, mut t: u32) -> Result<(Vec<u8>, bool), String> {
     let plain = |s: String| Ok((s.into_bytes(), false));
     if is_signed(t) {
         return match v {
-            Some(V::IntValue(x)) => plain((*x as i32).to_string()),
+            Some(V::IntValue(x)) => plain(signed_int(t, *x).to_string()),
             Some(V::LongValue(x)) => plain((*x as i64).to_string()),
             _ => Err(format!("{name} metric without an integer value")),
         };
@@ -381,8 +392,15 @@ pub fn value_text(m: &Metric, mut t: u32) -> Result<(Vec<u8>, bool), String> {
     }
 }
 
+/// A finite number (Rust would also take "nan", "inf" and overflow to inf).
 fn parse_f64(s: &str) -> Option<f64> {
-    s.trim().strip_prefix('+').unwrap_or(s.trim()).parse().ok()
+    let t = s.trim();
+    t.strip_prefix('+').unwrap_or(t).parse::<f64>().ok().filter(|d| d.is_finite())
+}
+
+/// A number that fits into a Float.
+fn parse_f32(s: &str) -> Option<f32> {
+    parse_f64(s).map(|d| d as f32).filter(|f| f.is_finite())
 }
 
 fn parse_bool(s: &str) -> Option<bool> {
@@ -462,7 +480,10 @@ fn pack_array(t: u32, text: &[u8]) -> Result<Vec<u8>, String> {
         return Ok(out);
     }
     if t == STRING_ARRAY {
-        for it in &items {
+        for (k, it) in items.iter().enumerate() {
+            if it.text.contains(&0) {
+                return Err(format!("item {k} contains a NUL character, which ends a StringArray item"));
+            }
             out.extend_from_slice(&it.text);
             out.push(0);
         }
@@ -475,7 +496,7 @@ fn pack_array(t: u32, text: &[u8]) -> Result<Vec<u8>, String> {
     for (k, it) in items.iter().enumerate() {
         let s = item(k, it)?;
         match t {
-            FLOAT_ARRAY => out.extend_from_slice(&(parse_f64(&s).ok_or(format!("item {k} is not a number"))? as f32).to_le_bytes()),
+            FLOAT_ARRAY => out.extend_from_slice(&parse_f32(&s).ok_or(format!("item {k} is not a Float number"))?.to_le_bytes()),
             DOUBLE_ARRAY => out.extend_from_slice(&parse_f64(&s).ok_or(format!("item {k} is not a number"))?.to_le_bytes()),
             _ => {
                 let raw = if let Some((lo, hi)) = int_range(t) {
@@ -509,7 +530,7 @@ pub fn set_value(m: &mut Metric, t: u32, text: &[u8]) -> Result<(), String> {
         INT64 | DATETIME => V::LongValue(parse_signed(&s(), i64::MIN, i64::MAX).ok_or_else(bad)? as u64),
         UINT8 | UINT16 => V::IntValue(parse_unsigned(&s(), uint_max(t)).ok_or_else(bad)? as u32),
         UINT32 | UINT64 => V::LongValue(parse_unsigned(&s(), uint_max(t)).ok_or_else(bad)?), // Sparkplug 3.0: long_value
-        FLOAT => V::FloatValue(parse_f64(&s()).ok_or_else(bad)? as f32),
+        FLOAT => V::FloatValue(parse_f32(&s()).ok_or_else(bad)?),
         DOUBLE => V::DoubleValue(parse_f64(&s()).ok_or_else(bad)?),
         BOOLEAN => V::BooleanValue(parse_bool(&s()).ok_or_else(bad)?),
         STRING | TEXT | UUID => V::StringValue(String::from_utf8(text.to_vec()).map_err(|_| format!("{name} value is not UTF-8"))?),
@@ -819,7 +840,8 @@ fn update(t: &Topic, kind: UpdateKind, metric: &str) -> Update {
 }
 
 fn born(t: &Topic, e: &mut Entity, p: &Payload, o: &mut Outcome) {
-    e.types.clear();
+    let was_online = e.online;
+    let old = std::mem::take(&mut e.types);
     e.aliases.clear();
     for m in &p.metrics {
         let Some(name) = m.name.as_deref().filter(|n| !n.is_empty()) else { continue }; // births name every metric
@@ -829,6 +851,12 @@ fn born(t: &Topic, e: &mut Entity, p: &Payload, o: &mut Outcome) {
             e.aliases.insert(a, name.to_string());
         }
         metric_update(t, name, ty, m, p, o);
+    }
+    // a rebirth without a metric: it will not be updated any more
+    if was_online {
+        for name in old.keys().filter(|n| !e.types.contains_key(*n)) {
+            o.updates.push(update(t, UpdateKind::Stale, name));
+        }
     }
     e.online = true;
     let mut u = update(t, UpdateKind::Online, "");
@@ -1019,6 +1047,36 @@ mod tests {
         assert_eq!(state_topic("scada"), "spBv1.0/STATE/scada");
         assert_eq!(state_payload(false, 1700000000000), r#"{"online":false,"timestamp":1700000000000}"#);
         assert!(valid_id("Line1") && !valid_id("a/b") && !valid_id("a+") && !valid_id(""));
+    }
+
+    #[test]
+    fn review_fixes() {
+        // signed int_value in the type's own width (Tahu) or sign-extended: both read as negative
+        for (t, raw, want) in [(INT8, 0xE9u32, "-23"), (INT8, 0xFFFF_FFE9, "-23"), (INT16, 0xFF85, "-123"), (INT16, 0xFFFF_FF85, "-123"),
+                               (INT8, 0x7F, "127"), (INT32, 0xFFFF_FFFF, "-1")] {
+            let mut m = Metric::new();
+            m.value = Some(metric::Value::IntValue(raw));
+            assert_eq!(text(&m, t), want, "{} {raw:#x}", data_type_name(t));
+        }
+        // writes: no nan / inf / Float overflow, no NUL inside a StringArray item
+        let mut r = Metric::new();
+        for (t, v) in [(BOOLEAN, "nan"), (DOUBLE, "inf"), (DOUBLE, "-Infinity"), (FLOAT, "1e40"), (INT32, "nan")] {
+            assert!(set_value(&mut r, t, v.as_bytes()).is_err(), "{} {v}", data_type_name(t));
+        }
+        assert!(set_value(&mut r, FLOAT_ARRAY, b"[1e40]").is_err() && set_value(&mut r, FLOAT, b"3.4e38").is_ok());
+        assert!(set_value(&mut r, STRING_ARRAY, br#"["a\u0000b"]"#).is_err());
+
+        // a rebirth without a metric makes it stale; the first birth does not
+        let mut h = Host::new();
+        let birth = |names: &[&str]| {
+            let ms = names.iter().map(|n| metric(Some(n), DOUBLE, Some("1"), None)).collect();
+            payload(ms, Some(0))
+        };
+        let o = h.on_message("spBv1.0/G/NBIRTH/N", &birth(&["a", "b"]), 0);
+        assert!(!o.updates.iter().any(|u| u.kind == UpdateKind::Stale));
+        let o = h.on_message("spBv1.0/G/NBIRTH/N", &birth(&["a"]), 0);
+        assert!(find(&o, UpdateKind::Stale, "b", "").is_some() && find(&o, UpdateKind::Stale, "a", "").is_none());
+        assert!(find(&o, UpdateKind::Value, "a", "").is_some());
     }
 
     fn find<'a>(o: &'a Outcome, kind: UpdateKind, metric: &str, device: &str) -> Option<&'a Update> {

@@ -483,9 +483,11 @@ void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub,
     RsMqttConnections &conns = RsMqttConnections::instance();
     for (const auto &a : sub.addresses)
     {
+      const RsMqttAddress *addr = conns.parsed(a.first);
+      if ( addr && addr->sparkplug )
+        continue;  // decoded by the Sparkplug host (sparkplugMessage)
       RsMqttConnection::Subscription::Delivery d;
       d.address = a.first;
-      const RsMqttAddress *addr = conns.parsed(a.first);
       if ( addr && addr->json )
       {
         d.json = true;
@@ -562,14 +564,15 @@ void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub,
 
 void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
 {
-  // our own STATE: another client (an earlier session's will) set it offline
-  if ( !conn.spbHostId.empty() && topic == RsMqttSparkplug::stateTopic(conn.spbHostId) )
+  // our own STATE: another client (an earlier session's will) set it offline;
+  // addresses on STATE topics still get the message below
+  const std::string &hostId = conn.spbStateHost();
+  if ( !hostId.empty() && topic == RsMqttSparkplug::stateTopic(hostId) )
   {
     std::string err;
     RsMqttJson::Value v;
     if ( RsMqttJson::get(payload, "online", v, err) == RsMqttJson::Found::Yes && v.text == "false" && conn.client )
       conn.client->publish(topic, RsMqttSparkplug::statePayload(true, conn.spbStateTs), 1, true);
-    return;
   }
 
   // exact subscriptions
@@ -584,13 +587,12 @@ void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &
     if ( !RsMqttAddress::topicMatches(filter, topic) ) continue;
     auto s = conn.subscriptions.find(filter);
     if ( s == conn.subscriptions.end() ) continue;
-    if ( s->second.sparkplug )
+    if ( s->second.sparkplugRefs > 0 )
     {
       if ( !sparkplugDone ) sparkplugMessage(conn, topic, payload);  // once per message
       sparkplugDone = true;
-      continue;
     }
-    deliverToSubscription(s->second, payload);
+    deliverToSubscription(s->second, payload);  // other addresses on the filter (the plan skips Sparkplug ones)
   }
 }
 
@@ -674,9 +676,9 @@ void RsMqttHWService::sparkplugConnected(RsMqttConnection &conn)
   if ( !conn.client )
     return;
   // the host application is online: subscriptions first, then STATE (Sparkplug 3.0)
-  if ( !conn.spbHostId.empty() )
+  if ( !conn.spbStateHost().empty() )
   {
-    std::string topic = RsMqttSparkplug::stateTopic(conn.spbHostId);
+    std::string topic = RsMqttSparkplug::stateTopic(conn.spbStateHost());
     try
     {
       conn.client->subscribe(topic, 1);
@@ -703,11 +705,11 @@ void RsMqttHWService::sparkplugConnected(RsMqttConnection &conn)
 void RsMqttHWService::sparkplugGoodbye(RsMqttConnection &conn)
 {
   // a clean disconnect sends no will: the host application says offline itself
-  if ( conn.spbHostId.empty() || !conn.client || !conn.connected )
+  if ( conn.spbStateHost().empty() || !conn.client || !conn.connected )
     return;
   try
   {
-    conn.client->publish(RsMqttSparkplug::stateTopic(conn.spbHostId),
+    conn.client->publish(RsMqttSparkplug::stateTopic(conn.spbStateHost()),
                          RsMqttSparkplug::statePayload(false, conn.spbStateTs), 1, true);
   }
   catch (const rsmqtt::Error &)

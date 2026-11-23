@@ -844,7 +844,9 @@ void sparkplug()
   string pre = "o_spb:$spb/" + g + "/" + n;
   string nodeT = "spBv1.0/" + g, stateT = "spBv1.0/STATE/" + host;
 
-  broker("o_spb", makeMapping("ServerURI", "tcp://localhost:18840", "Options", makeDynString("sparkplug.hostId=" + host)));
+  // redu.sparkplug.hostId: accepted, used by the second redundant host only
+  broker("o_spb", makeMapping("ServerURI", "tcp://localhost:18840",
+         "Options", makeDynString("sparkplug.hostId=" + host, "redu.sparkplug.hostId=" + host + "-2")));
   string s = waitState("o_spb", 3, 8);
   delay(1);
   string state = sh("docker exec " + BROKER_CONTAINER + " mosquitto_sub -p 1883 -t " + stateT + " -C 1 -W 3");
@@ -862,6 +864,10 @@ void sparkplug()
   setAddr(d + "setpoint",    pre + "/PLC7;metric=setpoint", 1, 1006);
   setAddr(d + "cmdSetpoint", pre + "/PLC7;metric=setpoint", 2, 1006);
   setAddr(d + "cmdCount",    pre + ";metric=count", 2, 1002);
+  // plain addresses next to the host: the own STATE topic and the edge node's filter
+  setAddr(TEST_DP + ".in",   "o_spb:" + stateT, 1);
+  setAddr(TEST_DP + ".out",  "o_spb:" + nodeT + "/+/" + n + "/#", 1);
+  dpSetWait(TEST_DP + ".in", "", TEST_DP + ".out", "");
   delay(1);
 
   spbPub(nodeT + "/NBIRTH/" + n, "0", makeDynString("bdSeq:Int64=5", "temp:Double=21.5@1", "count:Int32=-7@2", "on:Boolean=true",
@@ -882,6 +888,12 @@ void sparkplug()
   delay(1);
   dpGet(d + "temp", temp, d + "count", count, d + "speed", speed);
   result("NDATA by alias and by name, DDATA", temp == 22.25 && count == -8 && speed == 1500, temp + " " + count + " " + speed);
+  string rawState, rawNode;
+  dpGet(TEST_DP + ".in", rawState, TEST_DP + ".out", rawNode);
+  result("plain addresses get the own STATE and the raw edge node messages",
+         strpos(rawState, "\"online\":true") >= 0 && rawNode != "", "STATE '" + rawState + "', node payload " + strlen(rawNode) + " chars");
+  dpSetWait(TEST_DP + ".in:_address.._type", DPCONFIG_NONE, TEST_DP + ".in:_distrib.._type", DPCONFIG_NONE,
+            TEST_DP + ".out:_address.._type", DPCONFIG_NONE, TEST_DP + ".out:_distrib.._type", DPCONFIG_NONE);
 
   // a gap in seq: the data counts, and the driver asks for a rebirth
   spbCapture(nodeT + "/NCMD/" + n, "ncmd.bin");
