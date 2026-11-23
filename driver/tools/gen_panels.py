@@ -21,7 +21,8 @@ Object names used by the rsmqttPanel*() functions of scripts/libs/rsmqtt.ctl
     txtKeepAlive, chkClean, txtUser, txtPassword, txtTrust, txtKeyStore,
     txtKey, chkVerify, txtWillTopic, txtWillPayload, cmbWillQos,
     chkWillRetain, cmbSubQos, cmbPubQos, chkPubRetain, txtOptions,
-    lblState, lblError, lblInfo, lblMessage
+    lblState, lblError, lblInfo, lblMessage, txtSpbHost, txtSpbHost2, lblSpbState,
+    tabBrokers, lblShown, lblSnapshot, lblCopyFrom
 """
 
 from pathlib import Path
@@ -62,6 +63,7 @@ class Panel:
         self.shape = 100   # shape ids (stock reference placeholders use 66..77)
         self.serial = 100  # tab order (stock shapes copied below use < 100)
         self.records = []
+        self.ox = 0        # added to every x (the broker form sits right of its table)
 
     def next(self):
         self.shape += 1
@@ -75,6 +77,7 @@ class Panel:
 
     def label(self, name, x, y, w, de, en=None, ru=None, bold=True):
         sid, ser = self.next()
+        x += self.ox
         self.add([
             f"2 {sid}", f'"{name}"', '""',
             f'1 {x} {y} E E E 1 E 1 E N "_3DText" E N "_3DFace" E E',
@@ -90,6 +93,7 @@ class Panel:
 
     def textfield(self, name, x1, y1, x2, y2, length=1000, password=False):
         sid, ser = self.next()
+        x1, x2 = x1 + self.ox, x2 + self.ox
         fmt = "S" if password else "s"   # "S" hides the input (as vision/loginConfirmation.pnl)
         self.add([
             f"14 {sid}", f'"{name}"', '""',
@@ -104,6 +108,7 @@ class Panel:
     def combobox(self, name, x1, y1, x2, y2, items=(), init=None, changed=None):
         """items: list of (de, en) tuples; the first one is preselected."""
         sid, ser = self.next()
+        x1, x2 = x1 + self.ox, x2 + self.ox
         rec = [
             f"22 {sid}", f'"{name}"', '""',
             f'1 {x1 - 2} {y1} E E E 1 E 1 E N "_WindowText" E N "_Window" E E',
@@ -129,6 +134,7 @@ class Panel:
     def button(self, name, x1, y1, x2, y2, de, en, click, tooltip=("", "")):
         # layout of cmdNewDp in panels/para/poll_groups.pnl
         sid, ser = self.next()
+        x1, x2 = x1 + self.ox, x2 + self.ox
         self.add([
             f"13 {sid}", f'"{name}"', '""',
             f'1 {x1 + 7} {y1 + 12} E E E 1 E 1 E N "_ButtonText" E N "_Button" E E',
@@ -144,6 +150,7 @@ class Panel:
     def checkbox(self, name, x1, y1, x2, y2, de, en):
         # layout of chbPollGroupActive in panels/para/poll_groups.pnl
         sid, ser = self.next()
+        x1, x2 = x1 + self.ox, x2 + self.ox
         self.add([
             f"20 {sid}", f'"{name}"', '""',
             f'1 {x1 + 2} {y1 + 2} E E E 1 E 1 E N "_3DText" E N "_3DFace" E E',
@@ -160,6 +167,7 @@ class Panel:
     def spinbox(self, name, x1, y1, x2, y2, lo, hi):
         # layout of stastu in panels/para/poll_groups.pnl
         sid, ser = self.next()
+        x1, x2 = x1 + self.ox, x2 + self.ox
         self.add([
             f"21 {sid}", f'"{name}"', '""',
             f'1 {x1 - 2} {y1} E E E 1 E 1 E N "_WindowText" E N "_Window" E E',
@@ -171,6 +179,29 @@ class Panel:
             script("main()\n{\n}"), "", "E", "",
             f"N {lo} {hi} 1 {lo} 1 1",
         ])
+
+    def table(self, name, x1, y1, x2, y2, columns, clicked):
+        """columns: (key, width, de, en); clicked: main(int row, string column, string value).
+        Layout of tabClassFilter in panels/para/s7plus_displayclassfilter.pnl."""
+        sid, ser = self.next()
+        x1, x2 = x1 + self.ox, x2 + self.ox
+        rec = [
+            f"25 {sid}", f'"{name}"', '""',
+            f'1 {x1} {y1} E E E 1 E 1 E N "_WindowText" E N "_Window" E E',
+            " E E", f"{ser} 0 0 0 0 0", "E E E",
+            *tip(),
+            "3", '"acceptDrops" ""', '"sizePolicy" "Expanding Expanding"', '"layoutAlignment" "AlignCenter"',
+            *fonts(FONT_NORMAL),
+            f"0  {x1} {y1} {x2} {y2}",
+            "E" + script(clicked),
+        ]
+        prefix = f" 1 0 1 {len(columns)} 1 "
+        for i, (key, width, de, en) in enumerate(columns):
+            # each column: its definition, header, tooltip; its width starts the next line
+            rec += [f'{prefix}"{key}" 10 1 0 "s" 3', *lang(de, en), "E", "3", *lang(""), ""]
+            prefix = f"{width} "
+        rec += [prefix, '16 16 "" 1 3', *lang("#1"), "8 30", *fonts(FONT_NORMAL), "0 0 0 0 0 7", "1 0"]
+        self.add(rec)
 
 
 def header(name, width, height, dollars, init, terminate=None):
@@ -444,29 +475,53 @@ main()
 {
   // an existing broker was picked (typing a new name keeps the form)
   if ( dynContains(this.items, this.text) > 0 )
-    rsmqttPanelShow(this.text);
+    rsmqttPanelSelect(this.text);
   else
     rsmqttPanelUpdateState();
 }"""
 
+TABLE_CLICKED = """#uses "rsmqtt"
+
+main(int row, string column, string value)
+{
+  rsmqttPanelTableClicked(row);
+}"""
+
+CLOSE_CLICKED = """#uses "rsmqtt"
+
+main()
+{
+  if ( !rsmqttPanelConfirmDiscard() )
+    return;
+  string broker;
+  getValue("cmbBroker", "text", broker);
+  PanelOffReturn(makeDynFloat(1), makeDynString(broker));
+}"""
+
+
+def lib_click(call):
+    """A button script that calls one rsmqtt.ctl function."""
+    return '#uses "rsmqtt"\n\nmain()\n{\n  ' + call + ';\n}'
+
 
 def broker_panel():
-    W = 700
+    TW = 560          # overview table on the left, the form right of it
+    W = TW + 700
     p = Panel()
     p.label("lblTitle", 20, 12, 400, "MQTT-Broker (rsmqtt)", bold=True)
 
+    p.ox = TW
     # selection + actions
     p.label("lblBrokerName", 20, 44, 200, "Broker (Name)", "Broker (name)")
     # editable: a new broker's name is typed here
-    p.combobox("cmbBroker", 18, 62, 260, 88, init="main()\n{\n  this.editable = TRUE;\n}", changed=SELECT_CHANGED)
+    p.combobox("cmbBroker", 18, 62, 230, 88, init="main()\n{\n  this.editable = TRUE;\n}", changed=SELECT_CHANGED)
     # New only clears the form; re-setting the items would select the first
     # broker again and Save would overwrite it.
-    p.button("cmdNew", 270, 61, 350, 89, "Neu", "New",
-             '#uses "rsmqtt"\n\nmain()\n{\n  rsmqttPanelClear();\n  setInputFocus(myModuleName(), myPanelName(), "cmbBroker");\n}')
-    p.button("cmdDelete", 356, 61, 436, 89, "Löschen", "Delete",
-             '#uses "rsmqtt"\n\nmain()\n{\n  rsmqttPanelDelete();\n}')
-    p.button("cmdReconnect", 442, 61, 572, 89, "Neu verbinden", "Reconnect",
-             '#uses "rsmqtt"\n\nmain()\n{\n  rsmqttPanelReconnect();\n}')
+    p.button("cmdNew", 238, 61, 308, 89, "Neu", "New", lib_click("rsmqttPanelNew()"))
+    p.button("cmdCopy", 314, 61, 400, 89, "Kopieren", "Copy", lib_click("rsmqttPanelCopy()"),
+             tooltip=("Neuen Broker mit dieser Konfiguration anlegen", "New broker with this configuration"))
+    p.button("cmdDelete", 406, 61, 486, 89, "Löschen", "Delete", lib_click("rsmqttPanelDelete()"))
+    p.button("cmdReconnect", 492, 61, 622, 89, "Neu verbinden", "Reconnect", lib_click("rsmqttPanelReconnect()"))
 
     # live state
     p.label("lblStateCap", 20, 102, 70, "Zustand:", "State:")
@@ -536,7 +591,18 @@ def broker_panel():
     p.combobox("cmbPubQos", 158, y + 40, 290, y + 66, [("0", "0"), ("1", "1"), ("2", "2")])
     p.checkbox("chkPubRetain", 300, y + 40, 500, y + 66, "Publish mit Retain", "Publish retained")
 
-    y += 76
+    # Sparkplug B host application (the options sparkplug.hostId / redu.sparkplug.hostId)
+    y += 80
+    p.label("lblSecSpb", 20, y, 600, "Sparkplug B: primäre Host Application (leer = keine)",
+            "Sparkplug B: primary host application (empty = none)")
+    p.label("lblSpbHost", 20, y + 22, 260, "Host-ID", "Host ID", bold=False)
+    p.label("lblSpbHost2", 300, y + 22, 300, "Host-ID des 2. redundanten Hosts", "Host ID of the 2nd redundant host",
+            bold=False)
+    p.textfield("txtSpbHost", 18, y + 40, 290, y + 66, length=255)
+    p.textfield("txtSpbHost2", 298, y + 40, 570, y + 66, length=255)
+    p.label("lblSpbState", 20, y + 72, 660, "", bold=False)
+
+    y += 98
     p.label("lblOptions", 20, y, 660,
             "Weitere rsmqtt-Optionen (name=wert; ...), z.B. sessionExpiryInterval=3600; ssl.alpn=mqtt",
             "More rsmqtt options (name=value; ...), e.g. sessionExpiryInterval=3600; ssl.alpn=mqtt", bold=False)
@@ -546,11 +612,25 @@ def broker_panel():
     p.label("lblMessage", 20, y, 660, "", bold=True)
 
     y += 26
-    p.button("cmdSave", 470, y, 580, y + 30, "Speichern", "Save",
-             '#uses "rsmqtt"\n\nmain()\n{\n  rsmqttPanelSave();\n}')
-    p.button("cmdClose", 586, y, 690, y + 30, "Schließen", "Close",
-             'main()\n{\n  string broker;\n  getValue("cmbBroker", "text", broker);\n'
-             '  PanelOffReturn(makeDynFloat(1), makeDynString(broker));\n}')
+    p.button("cmdSave", 470, y, 580, y + 30, "Speichern", "Save", lib_click("rsmqttPanelSave()"))
+    p.button("cmdClose", 586, y, 690, y + 30, "Schließen", "Close", CLOSE_CLICKED)
+
+    # panel state, hidden by rsmqttPanelInit: the broker shown, the form as
+    # last shown or saved (unsaved changes), the broker a copy was made from
+    p.label("lblShown", 20, y + 4, 100, "", bold=False)
+    p.label("lblSnapshot", 20, y + 4, 100, "", bold=False)
+    p.label("lblCopyFrom", 20, y + 4, 100, "", bold=False)
+
+    # overview of all brokers: updated every second, a click shows the broker
+    p.ox = 0
+    p.label("lblOverview", 20, 44, 400, "Alle Broker", "All brokers")
+    p.table("tabBrokers", 18, 62, TW - 10, y + 30, [
+        ("broker", 110, "Broker", "Broker"),
+        ("drv", 50, "Treiber", "Driver"),
+        ("state", 130, "Zustand", "State"),
+        ("io", 90, "Ein / Aus", "In / out"),
+        ("error", 150, "Letzter Fehler", "Last error"),
+    ], TABLE_CLICKED)
 
     height = y + 44
     lines = header("rsmqtt_brokers", W, height, ["$broker"], BROKERS_PANEL_INIT)

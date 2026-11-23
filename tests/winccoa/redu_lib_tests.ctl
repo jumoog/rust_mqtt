@@ -65,7 +65,8 @@ dyn_string main(bool simulated)
   dpSetWait("_RsMqtt_o_lib_2.State.ConnState", 1);
   string line = rsmqttBrokerStatusLine("o_lib");
   check(pre + "status line " + (simulated ? "adds host 2" : "has no host part"),
-        simulated ? strpos(line, "|  host 2: disconnected") > 0 : strpos(line, "|  host") < 0, line);
+        simulated ? strpos(line, "|  " + rsmqttT("Host ", "host ") + "2: " + rsmqttConnStateText(RSMQTT_CS_DISCONNECTED)) > 0
+                  : strpos(strtolower(line), "|  host") < 0, line);   // texts in the UI language
 
   // upgrade creates missing twins (nothing in a single system)
   if ( simulated )
