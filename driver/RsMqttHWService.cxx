@@ -1,6 +1,7 @@
 #include "RsMqttHWService.hxx"
 #include "RsMqttBrokerDp.hxx"
 #include "RsMqttConnections.hxx"
+#include "RsMqttRedu.hxx"
 #include "RsMqttResources.hxx"
 #include "RsMqttTransformationType.hxx"
 
@@ -83,6 +84,11 @@ PVSSboolean RsMqttHWService::initialize(int, char *[])
 
   ErrHdl::error(ErrClass::PRIO_INFO, ErrClass::ERR_CONTROL, ErrClass::NOERR, "RsMqttHWService", "initialize",
                 CharString(rsmqtt::version()));
+  if ( RsMqttRedu::simulatedHost() )
+    log(ErrClass::PRIO_WARNING, "initialize",
+        "simulateReduHost = " + std::to_string(RsMqttRedu::simulatedHost()) + ": acting as host " +
+        std::to_string(RsMqttRedu::simulatedHost()) + " of a redundant pair (for tests only), using " +
+        (const char *) RsMqttResources::getDriverDp());
 
   // Broker datapoints: _RsMqttDriver_<num>.Brokers lists them.
   driverIntDp = std::make_unique<RsMqttDriverIntDp>(RsMqttResources::getDriverDp());

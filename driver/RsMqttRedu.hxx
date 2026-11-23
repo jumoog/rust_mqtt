@@ -34,6 +34,11 @@ namespace RsMqttRedu
   bool isRedundant();
   /// This driver runs on the second host of a redundant system.
   bool isHost2();
+
+  /// For tests without a redundant system (config "simulateReduHost = 1|2"):
+  /// the driver acts as that host of a redundant pair. 0 turns it off.
+  void simulateHost(int host);
+  int simulatedHost();
 }
 
 #endif

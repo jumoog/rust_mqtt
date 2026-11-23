@@ -296,8 +296,11 @@ anytype res; evalScript(res, src, makeDynString(), "tls"); return res;
 | `buffer` | keep alive detects a hung broker, automatic reconnect, `maxBufferedMessages` + `deleteOldestMessages` |
 | `will_arm`, `will_check` | will with retain, QoS 1 and v5 properties; kill `WCCOArsmqtt` between the two |
 | `persist_arm`, `persist_down`, `persist_check` | `persistence=file`: kill the driver after `persist_arm`, run `persist_down`, start the driver, then `persist_check` |
+| `host2_prepare`, `host2`, `host2_check` | the second redundant host without a redundant system (see below): twins, client id `_2`, Sparkplug STATE only with `redu.sparkplug.hostId` (online, set online again, offline, will), decoding and rebirths on host 2 |
 
 Each group returns `PASS`/`FAIL`/`INFO` lines and removes its broker DPs afterwards (`<group>:keep`, e.g. `json:keep`, leaves the test DPs, their addresses and the broker in place).
+
+A redundant system needs a license, so the driver can act as a host of a redundant pair on a single system for tests: `simulateReduHost = 2` (or `1`) in the `[rsmqtt]` section makes it use the `_2` twins and the host-2 rules, and it logs a warning at startup. Sequence: run `host2_prepare` (creates `_RsMqttDriver_<num>_2`), add `simulateReduHost = 2` and restart the driver, run `host2`, kill `WCCOArsmqtt`, run `host2_check` (checks the will and removes the twins), remove the entry and start the driver. Not covered: the event manager copying the configuration to the twins and the switch between active and passive host.
 
 [tests/winccoa/redu_lib_tests.ctl](tests/winccoa/redu_lib_tests.ctl) checks the redundancy functions of `rsmqtt.ctl` (twins, lists, status line, `rsmqttUpgradeToRedundant()`), once as a single system and once with `isRedundant()` replaced by `TRUE`; the file header shows how to run it.
 

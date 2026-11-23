@@ -128,6 +128,16 @@ PVSSboolean RsMqttResources::readSection()
     }
     else if ( kw.icmp("traceLevel") == 0 )
       getCfgStream() >> traceLevel;
+    else if ( kw.icmp("simulateReduHost") == 0 )
+    {
+      // tests only: act as host 1 or 2 of a redundant pair on a single system
+      int host = 0;
+      getCfgStream() >> host;
+      if ( host != 0 && host != 1 && host != 2 )
+        cfgError(CharString("simulateReduHost must be 0, 1 or 2"));
+      else
+        RsMqttRedu::simulateHost(host);
+    }
     else if ( current && kw.icmp("subscribeQoS") == 0 )
       getCfgStream() >> current->subscribeQoS;
     else if ( current && kw.icmp("publishQoS") == 0 )

@@ -12,8 +12,9 @@
 //   string src; fileToString("<repo>/tests/winccoa/option_tests.ctl", src);
 //   anytype res; evalScript(res, src, makeDynString(), "transport");
 //
-// Groups: transport, auth, tls, ws, connect, v5, session, buffer,
-//         will_arm / will_check, persist_arm / persist_check, cleanup
+// Groups: transport, auth, tls, ws, connect, v5, session, buffer, json, dyn,
+//         redu, spb, will_arm / will_check, persist_arm / persist_check,
+//         host2_prepare / host2 / host2_check (see host2_prepare)
 
 const int    DRV      = 3;
 const string DRV_DP   = "_RsMqttDriver_3";
@@ -959,6 +960,111 @@ void sparkplug()
   cleanup();
 }
 
+/** Second redundant host without a redundant system: the driver runs with
+    "simulateReduHost = 2" in [rsmqtt] and uses the "_2" twins.
+
+    Sequence: host2_prepare (normal driver) -> add "simulateReduHost = 2" to
+    the config and restart the driver -> host2 -> kill WCCOArsmqtt (the will)
+    -> host2_check (driver stopped: checks the will, removes the twins) ->
+    remove the config entry and start the driver. */
+const string DRV_DP2 = DRV_DP + "_2";
+
+void host2_prepare()
+{
+  if ( !dpExists(DRV_DP2) )
+    dpCreate(DRV_DP2, "_RsMqttDriver");
+  dpSetWait(DRV_DP2 + ".Brokers", makeDynString());
+  result("driver twin " + DRV_DP2 + " ready", dpExists(DRV_DP2), "");
+}
+
+/** Broker twin "_RsMqtt_<name>_2", listed in the driver twin. */
+void broker2(string name, dyn_string options)
+{
+  string dp = "_RsMqtt_" + name + "_2";
+  if ( !dpExists(dp) ) dpCreate(dp, "_RsMqttBroker");
+  dpSetWait(dp + ".Config.ServerURI", "tcp://localhost:18840", dp + ".Config.ClientId", "opt-h2-" + rnd(3),
+            dp + ".Config.MQTTVersion", 5, dp + ".Config.CleanSession", TRUE, dp + ".Config.Options", options,
+            dp + ".Config.WillTopic", "", dp + ".Config.SubscribeQoS", 1, dp + ".Config.PublishQoS", 1);
+  dpSetWait(dp + ".Config.Active", TRUE);
+  dyn_string list; dpGet(DRV_DP2 + ".Brokers", list);
+  if ( dynContains(list, name) < 1 ) dynAppend(list, name);
+  dpSetWait(DRV_DP2 + ".Brokers", list);
+}
+
+string retainedState(string hostId)
+{
+  return sh("docker exec " + BROKER_CONTAINER + " mosquitto_sub -p 1883 -t spBv1.0/STATE/" + hostId + " -C 1 -W 2");
+}
+
+void host2()
+{
+  string h1 = "opt-h1-" + rnd(2), h2 = "opt-h2-" + rnd(2);
+  string g = "OptH2", n = "E" + rnd(2);
+  mosqPub("-r -n -t spBv1.0/STATE/" + h1);
+
+  // sparkplug.hostId alone: host 2 is no primary host (no STATE), but it decodes and asks for rebirths
+  broker2("o_h2a", makeDynString("sparkplug.hostId=" + h1));
+  string s = waitState("o_h2a_2", 3, 8);
+  string clientId; dpGet("_RsMqtt_o_h2a_2.State.ClientId", clientId);
+  result("host 2 uses the twins and the client id + _2", stateOf(s) == 3 && strpos(clientId, "_2") == strlen(clientId) - 2,
+         s + " " + clientId);
+  delay(1);
+  string st = retainedState(h1);
+  result("host 2 without redu.sparkplug.hostId publishes no STATE", st == "", "STATE/" + h1 + ": '" + st + "'");
+
+  setAddr(TEST_DP + ".in", "o_h2a:$spb/" + g + "/" + n + ";metric=name", 1);
+  dpSetWait(TEST_DP + ".in", "");
+  delay(1);
+  spbPub("spBv1.0/" + g + "/NBIRTH/" + n, "0", makeDynString("bdSeq:Int64=1", "name:String=from host 2"));
+  delay(1);
+  string got; dpGet(TEST_DP + ".in", got);
+  result("host 2 decodes Sparkplug data", got == "from host 2", "'" + got + "'");
+  spbCapture("spBv1.0/" + g + "/NCMD/" + n, "h2rb.bin");
+  delay(1);
+  spbPub("spBv1.0/" + g + "/NDATA/" + n, "7", makeDynString("name:String=gap"));
+  delay(1);
+  string rb = spbDecode("h2rb.bin");
+  result("host 2 asks for a rebirth after a seq gap", strpos(rb, "Node Control/Rebirth") >= 0, rb);
+  dpSetWait(TEST_DP + ".in:_address.._type", DPCONFIG_NONE, TEST_DP + ".in:_distrib.._type", DPCONFIG_NONE);
+
+  // redu.sparkplug.hostId: host 2's own STATE, never host 1's
+  broker2("o_h2b", makeDynString("sparkplug.hostId=" + h1, "redu.sparkplug.hostId=" + h2));
+  s = waitState("o_h2b_2", 3, 8);
+  delay(1);
+  string st2 = retainedState(h2);
+  st = retainedState(h1);
+  result("redu.sparkplug.hostId: STATE online under host 2's id, none under host 1's",
+         stateOf(s) == 3 && strpos(st2, "\"online\":true") >= 0 && st == "", "STATE/" + h2 + ": " + st2 + ", STATE/" + h1 + ": '" + st + "'");
+
+  mosqPub("-r -t spBv1.0/STATE/" + h2 + " -m {\\\"online\\\":false,\\\"timestamp\\\":1}");
+  delay(2);
+  st2 = retainedState(h2);
+  result("STATE set offline by another client: host 2 sets it online again", strpos(st2, "\"online\":true") >= 0, st2);
+
+  dpSetWait("_RsMqtt_o_h2b_2.Config.Active", FALSE);
+  waitState("o_h2b_2", 0, 5);
+  delay(1);
+  st2 = retainedState(h2);
+  result("Active=FALSE: host 2's STATE offline", strpos(st2, "\"online\":false") >= 0, st2);
+
+  // armed again for host2_check: killing the driver must publish the will
+  dpSetWait("_RsMqtt_o_h2b_2.Config.Active", TRUE);
+  waitState("o_h2b_2", 3, 8);
+  dpSetWait(TEST_DP + ".out", h2);   // remembered for host2_check
+}
+
+void host2_check()
+{
+  string h2; dpGet(TEST_DP + ".out", h2);
+  string st2 = retainedState(h2);
+  result("driver killed: host 2's will sets its STATE offline", strpos(st2, "\"online\":false") >= 0, st2);
+  mosqPub("-r -n -t spBv1.0/STATE/" + h2);
+  dpSetWait(DRV_DP2 + ".Brokers", makeDynString());
+  dyn_string twins = makeDynString("_RsMqtt_o_h2a_2", "_RsMqtt_o_h2b_2", DRV_DP2);
+  for (int i = 1; i <= dynlen(twins); i++)
+    if ( dpExists(twins[i]) ) dpDelete(twins[i]);
+}
+
 dyn_string main(string group)
 {
   gKeep = strpos(group, ":keep") > 0;
@@ -976,7 +1082,11 @@ dyn_string main(string group)
     case "json":          json(); break;
     case "dyn":           dynTypes(); break;
     case "redu":          redu(); break;
-    case "spb":           sparkplug(); break;    case "buffer":        buffer(); break;
+    case "spb":           sparkplug(); break;
+    case "buffer":        buffer(); break;
+    case "host2_prepare": host2_prepare(); break;
+    case "host2":         host2(); break;
+    case "host2_check":   host2_check(); break;
     case "will_arm":      will_arm(); break;
     case "will_check":    will_check(); break;
     case "persist_arm":   persist_arm(); break;
