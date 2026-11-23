@@ -4,7 +4,7 @@ Two parts:
 
 | Part | Path | What it is |
 |---|---|---|
-| **rsmqtt** library | [crates/rsmqtt](crates/rsmqtt) | MQTT client with a C ABI ([rsmqtt.h](crates/rsmqtt/include/rsmqtt.h)) and a header-only C++17 wrapper ([rsmqtt.hpp](crates/rsmqtt/include/rsmqtt.hpp)). Built on the pure-Rust Eclipse Paho client ([../paho.mqtt.rust](../paho.mqtt.rust)). No OpenSSL or Paho C DLLs, so it can't clash with the OpenSSL that ships with WinCC OA. |
+| **rsmqtt** library | [crates/rsmqtt](crates/rsmqtt) | MQTT client with a C ABI ([rsmqtt.h](crates/rsmqtt/include/rsmqtt.h)) and a header-only C++17 wrapper ([rsmqtt.hpp](crates/rsmqtt/include/rsmqtt.hpp)). Built on the pure-Rust Eclipse Paho client ([paho.mqtt.rust](https://github.com/eclipse-paho/paho.mqtt.rust), branch `v2`). No OpenSSL or Paho C DLLs, so it can't clash with the OpenSSL that ships with WinCC OA. |
 | **WCCOArsmqtt** driver | [driver](driver) | A WinCC OA 3.21 driver (ComDrv / `DrvManager`) that maps DPEs to MQTT topics through `_address` configs. Links rsmqtt statically. |
 
 ## Features (the Paho C `MQTTAsync` feature set)
@@ -68,6 +68,17 @@ cmake --build driver/build --config RelWithDebInfo
 ```
 
 The driver's CMake runs `cargo build --release -p rsmqtt-wincc` on its own and links `target/release/rsmqtt_wincc.lib` (the client library alone is `cargo build --release -p rsmqtt`). The result is `driver/build/RelWithDebInfo/WCCOArsmqtt.exe`; copy it into the project's `bin` directory.
+
+The pure-Rust Paho client (2.0) is not on crates.io yet, so Cargo fetches it from the Eclipse repository, pinned to one commit of its `v2` branch (see [crates/rsmqtt/Cargo.toml](crates/rsmqtt/Cargo.toml)); the first build needs network access. To build against a local checkout of paho.mqtt.rust instead, e.g. next to this repository, create `.cargo/config.toml` (ignored by git):
+
+```toml
+[patch."https://github.com/eclipse-paho/paho.mqtt.rust"]
+paho-mqtt = { path = "../paho.mqtt.rust" }
+```
+
+While the patch is active, Cargo writes the Paho entries into `Cargo.lock` without their git source; don't commit `Cargo.lock` in that state (remove the patch and run `cargo metadata` once to get it back).
+
+On Linux the libraries build the same way (`librsmqtt.a`, `librsmqtt_wincc.a`); the crates, broker tests and C++ examples are tested on Debian 12.
 
 ## Driver usage
 
@@ -355,4 +366,4 @@ rsmqtt (both crates, the driver, panels, scripts and tests) is licensed under ei
 
 at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
-Third-party code keeps its own license: the libraries and the driver link [paho.mqtt.rust](https://github.com/eclipse/paho.mqtt.rust) (EPL-2.0) and crates under MIT, Apache-2.0, ISC and BSD licenses (`cargo metadata` lists them), and the driver is built against the WinCC OA API, which is Siemens' and not covered by this license. Whoever ships the binaries passes on those licenses' notices.
+Third-party code keeps its own license: the libraries and the driver link [paho.mqtt.rust](https://github.com/eclipse-paho/paho.mqtt.rust) (EPL-2.0) and crates under MIT, Apache-2.0, ISC and BSD licenses (`cargo metadata` lists them), and the driver is built against the WinCC OA API, which is Siemens' and not covered by this license. Whoever ships the binaries passes on those licenses' notices.

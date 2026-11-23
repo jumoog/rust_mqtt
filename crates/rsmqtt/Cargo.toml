@@ -15,7 +15,10 @@ name = "rsmqtt"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [dependencies]
-paho-mqtt = { path = "../../../paho.mqtt.rust", default-features = false, features = ["tokio", "tls", "websocket"] }
+# The pure-Rust Paho client (2.0, branch v2) is not on crates.io yet: pinned to
+# a commit of the Eclipse repository. To work on a local checkout instead, see
+# "Building" in the README (a [patch] in .cargo/config.toml).
+paho-mqtt = { git = "https://github.com/eclipse-paho/paho.mqtt.rust", rev = "be3570486daab3d9ed7f65479b975c8eaeb2995d", default-features = false, features = ["tokio", "tls", "websocket"] }
 futures = "0.3"
 log = { version = "0.4", features = ["std"] }
 

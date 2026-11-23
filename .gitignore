@@ -2,3 +2,4 @@
 /driver/build
 /examples/cpp/build
 /tests/broker/certs
+/.cargo/config.toml

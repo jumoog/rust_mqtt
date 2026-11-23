@@ -458,6 +458,7 @@ checksum = "d05e27ee213611ffe7d6348b942e8f942b37114c00cc03cec254295a4a17852e"
 [[package]]
 name = "paho-mqtt"
 version = "2.0.0-pre.1"
+source = "git+https://github.com/eclipse-paho/paho.mqtt.rust?rev=be3570486daab3d9ed7f65479b975c8eaeb2995d#be3570486daab3d9ed7f65479b975c8eaeb2995d"
 dependencies = [
  "async-channel",
  "bytes",
@@ -477,6 +478,7 @@ dependencies = [
 [[package]]
 name = "paho-mqtt-codec"
 version = "0.1.0"
+source = "git+https://github.com/eclipse-paho/paho.mqtt.rust?rev=be3570486daab3d9ed7f65479b975c8eaeb2995d#be3570486daab3d9ed7f65479b975c8eaeb2995d"
 dependencies = [
  "bytes",
  "strum",
