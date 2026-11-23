@@ -123,7 +123,8 @@ int rsmqttCreateBroker(string broker, int driverNum, string serverURI, mapping c
               dp + ".Config.CleanSession", TRUE,
               dp + ".Config.SubscribeQoS", 1,
               dp + ".Config.PublishQoS", 1,
-              dp + ".Config.PublishRetain", FALSE);
+              dp + ".Config.PublishRetain", FALSE,
+              dp + ".Config.TlsVerify", TRUE);   // check the host name (TLS URIs)
   }
 
   if ( dpSetWait(dp + ".Config.ServerURI", serverURI) != 0 )
@@ -540,7 +541,7 @@ void rsmqttPanelClear(string name = "")
                 "txtTrust",       "text",        "",
                 "txtKeyStore",    "text",        "",
                 "txtKey",         "text",        "",
-                "chkVerify",      "state", 0,    FALSE,
+                "chkVerify",      "state", 0,    TRUE,
                 "txtWillTopic",   "text",        "",
                 "txtWillPayload", "text",        "",
                 "cmbWillQos",     "selectedPos", 1,

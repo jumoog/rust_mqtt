@@ -8,6 +8,23 @@
 
 #include <cctype>
 
+// TLS transports, as in paho.mqtt.rust's is_secure_uri()
+static bool anySecureUri(const std::string &uri, const std::vector<std::string> &more)
+{
+  auto secure = [](const std::string &u) {
+    for (const char *scheme : {"ssl://", "tls://", "mqtts://", "wss://"})
+      if ( u.rfind(scheme, 0) == 0 )
+        return true;
+    return false;
+  };
+  if ( secure(uri) )
+    return true;
+  for (const auto &u : more)
+    if ( secure(u) )
+      return true;
+  return false;
+}
+
 static void logError(ErrClass::ErrPrio prio, const char *func, const std::string &text)
 {
   ErrHdl::error(prio, ErrClass::ERR_CONTROL,
@@ -104,7 +121,11 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
     if ( !cfg.tlsTrustStore.empty() ) o.set("ssl.trustStore", cfg.tlsTrustStore);
     if ( !cfg.tlsKeyStore.empty() )   o.set("ssl.keyStore", cfg.tlsKeyStore);
     if ( !cfg.tlsPrivateKey.empty() ) o.set("ssl.privateKey", cfg.tlsPrivateKey);
-    if ( cfg.tlsVerify )              o.set("ssl.verify", true);
+    // Config.TlsVerify decides the host-name check both ways (the chain is
+    // checked either way). Only for TLS URIs: ssl.* options attach TLS
+    // settings to the connection. Config.Options "ssl.verify=..." still wins.
+    bool secure = anySecureUri(cfg.serverURI, cfg.serverURIs);
+    if ( secure )                     o.set("ssl.verify", cfg.tlsVerify);
     if ( !cfg.willTopic.empty() )
     {
       o.set("will.topic", cfg.willTopic)

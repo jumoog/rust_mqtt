@@ -24,12 +24,18 @@ fn last_error() -> String {
     unsafe { CStr::from_ptr(rsmqtt_last_error()).to_string_lossy().into_owned() }
 }
 
+/// `prefix` plus 64 random bits: client IDs and topics must not collide with
+/// other users of a public test broker (a second client with the same ID
+/// makes the broker drop the first).
 fn unique(prefix: &str) -> String {
-    let n = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
-    format!("{prefix}-{n}")
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // RandomState is seeded from the OS RNG
+    let mut h = RandomState::new().build_hasher();
+    h.write_u64(COUNTER.fetch_add(1, Ordering::Relaxed));
+    format!("{prefix}-{:016x}", h.finish())
 }
 
 /// Minimal safe wrapper for the tests.
@@ -69,7 +75,9 @@ impl Cli {
         unsafe {
             let mut tok = 0;
             assert_eq!(rsmqtt_connect(self.0, &mut tok), 0, "connect: {}", last_error());
-            let rc = rsmqtt_wait_for_completion(self.0, tok, 10_000);
+            // as long as Paho's default connect timeout: a public broker whose
+            // IPv6 addresses refuse MQTT costs ~2 s per address before IPv4
+            let rc = rsmqtt_wait_for_completion(self.0, tok, 30_000);
             assert_eq!(rc, 0, "connect wait: {}", last_error());
         }
     }
@@ -166,10 +174,13 @@ fn roundtrip(server: &str, version: &str) {
     }
     let msgs = sub.messages(3, Duration::from_secs(10));
     assert_eq!(msgs.len(), 3, "got {msgs:?}");
-    for (qos, m) in msgs.iter().enumerate() {
-        assert_eq!(m.topic, format!("{topic}/q{qos}"));
+    // MQTT orders messages only per topic (and QoS), so the three topics
+    // may arrive in any order; check each one by its topic.
+    for qos in 0..=2 {
+        let t = format!("{topic}/q{qos}");
+        let m = msgs.iter().find(|m| m.topic == t).unwrap_or_else(|| panic!("nothing on {t}: {msgs:?}"));
         assert_eq!(m.payload, format!("hello {qos}").as_bytes());
-        assert_eq!(m.qos, qos as i32);
+        assert_eq!(m.qos, qos);
     }
 
     // The publisher got one Complete event per publish.
@@ -255,6 +266,73 @@ fn tls_trust_store() {
         assert!(rc < 0, "untrusted server certificate was accepted");
         eprintln!("untrusted cert rejected: rc={rc} {}", last_error());
     }
+}
+
+/// Public broker with a publicly trusted certificate, e.g.
+/// RSMQTT_TEST_PUBLIC_TLS_URI=mqtts://broker.hivemq.com:8883 and
+/// (optional) RSMQTT_TEST_PUBLIC_WSS_URI=wss://broker.hivemq.com:8884/mqtt
+///
+/// Shows that no CA file is needed (the system trust store is used), that
+/// the host name is checked by default, and what `ssl.verify=0` and
+/// `ssl.disableDefaultTrustStore=1` change.
+#[test]
+fn tls_public_ca_and_hostname() {
+    let Some(u) = std::env::var("RSMQTT_TEST_PUBLIC_TLS_URI").ok().filter(|s| !s.is_empty()) else {
+        return eprintln!("RSMQTT_TEST_PUBLIC_TLS_URI not set; skipped");
+    };
+    let try_connect = |opts: &[(&str, &str)]| -> (i32, String) {
+        let cli = Cli::new(opts);
+        unsafe {
+            let mut tok = 0;
+            let rc = rsmqtt_connect(cli.0, &mut tok);
+            let rc = if rc == 0 { rsmqtt_wait_for_completion(cli.0, tok, 30_000) } else { rc };
+            (rc, last_error())
+        }
+    };
+
+    // 1. no CA file: the system trust store verifies the public certificate
+    let cli = Cli::new(&[("serverURI", &u), ("clientId", &unique("tls-public"))]);
+    cli.connect();
+    let topic = unique("rsmqtt/test/tls-public");
+    cli.subscribe(&topic, 1);
+    cli.publish(&topic, b"over tls", 1, ptr::null());
+    let msgs = cli.messages(1, Duration::from_secs(10));
+    assert_eq!(msgs.len(), 1);
+    cli.disconnect();
+    eprintln!("1. {u} without CA file: connected, round trip ok");
+
+    // 2. same over secure WebSocket
+    if let Some(w) = std::env::var("RSMQTT_TEST_PUBLIC_WSS_URI").ok().filter(|s| !s.is_empty()) {
+        let cli = Cli::new(&[("serverURI", &w), ("clientId", &unique("wss-public"))]);
+        cli.connect();
+        cli.disconnect();
+        eprintln!("2. {w} without CA file: connected");
+    }
+
+    // 3. host name check: connect by IPv4 address -> name mismatch
+    let rest = u.split_once("://").unwrap().1;
+    let (host, port) = rest.rsplit_once(':').unwrap();
+    use std::net::ToSocketAddrs;
+    let ip = (host, port.parse::<u16>().unwrap())
+        .to_socket_addrs()
+        .unwrap()
+        .find(|a| a.is_ipv4())
+        .expect("IPv4 address")
+        .ip();
+    let by_ip = format!("mqtts://{ip}:{port}");
+    let (rc, err) = try_connect(&[("serverURI", &by_ip), ("clientId", &unique("tls-ip"))]);
+    assert!(rc < 0, "certificate accepted for {by_ip} although it is issued for {host}");
+    eprintln!("3. {by_ip} (default, host name checked): refused: rc={rc} {err}");
+
+    // 4. ssl.verify=0 waives only the name check; the chain is still verified
+    let (rc, err) = try_connect(&[("serverURI", &by_ip), ("clientId", &unique("tls-ip-noverify")), ("ssl.verify", "0")]);
+    assert_eq!(rc, 0, "ssl.verify=0 should accept the right certificate under another name: {err}");
+    eprintln!("4. {by_ip} with ssl.verify=0: connected");
+
+    // 5. without the system trust store and without a CA file: refused
+    let (rc, err) = try_connect(&[("serverURI", &u), ("clientId", &unique("tls-nostore")), ("ssl.disableDefaultTrustStore", "1")]);
+    assert!(rc < 0, "connected without any trust anchor");
+    eprintln!("5. {u} with ssl.disableDefaultTrustStore=1: refused: rc={rc} {err}");
 }
 
 #[test]

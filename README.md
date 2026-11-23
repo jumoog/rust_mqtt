@@ -124,7 +124,8 @@ rsmqttCreateBroker("cloud", 2, "mqtts://mqtt.example.com:8883",
 | `Config.ServerURI`, `Config.ServerURIs` | broker URI; optional fail-over list |
 | `Config.ClientId`, `MQTTVersion` (0/3/4/5), `KeepAlive` (s), `CleanSession` | session settings |
 | `Config.Username`, `Config.Password` | credentials |
-| `Config.TlsTrustStore`, `TlsKeyStore`, `TlsPrivateKey`, `TlsVerify` | TLS |
+| `Config.TlsTrustStore`, `TlsKeyStore`, `TlsPrivateKey` | TLS: CA certificates (PEM; leave empty for publicly trusted broker certificates, the Windows/system store is used), client certificate and key for mutual TLS |
+| `Config.TlsVerify` | TLS: TRUE checks that the certificate names the host in the URI; FALSE skips that check (e.g. a broker reached by IP address), the certificate chain is still checked. Brokers created with the panel or `rsmqttCreateBroker()` start with TRUE; a DP created by hand starts with FALSE |
 | `Config.WillTopic`, `WillPayload`, `WillQoS`, `WillRetain` | last will |
 | `Config.SubscribeQoS`, `PublishQoS`, `PublishRetain` | defaults for addresses without `qos=` / `retain` |
 | `Config.Options` | any further rsmqtt option as `name=value`, e.g. `sessionExpiryInterval=3600`, `ssl.alpn=mqtt` |
