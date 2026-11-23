@@ -1,4 +1,4 @@
-# rsmqtt â€” MQTT for WinCC OA, in Rust
+# rsmqtt — MQTT for WinCC OA, in Rust
 
 Two parts:
 
@@ -16,7 +16,7 @@ Two parts:
 - Offline buffering (`sendWhileDisconnected`, `maxBufferedMessages`, `deleteOldestMessages`), `maxInflight`
 - Persistence: none, memory or file (`persistenceDir`)
 - MQTT v5: all properties, reason codes, subscription options (no-local, retain-as-published, retain handling), shared subscriptions, session expiry, user properties
-- Option names are the Paho C struct field names, and return codes -1â€¦-18 match `MQTTASYNC_*`
+- Option names are the Paho C struct field names, and return codes -1…-18 match `MQTTASYNC_*`
 
 Not supported: TLS-PSK and password-protected private keys (rustls can't handle either), and enhanced (AUTH) authentication through the C API.
 
@@ -165,7 +165,7 @@ rsmqttSetAddress("Pump1.hum",      "plant:line1/pump1;json=data.hum;ts=data.time
 
 `<broker>:$spb/<group>/<edge node>[/<device>];metric=<name>|;online` (Sparkplug B, see below)
 
-- Input addresses subscribe. Filters with `+` / `#` and `$share/<group>/â€¦` work too, and every matching message updates the DPE.
+- Input addresses subscribe. Filters with `+` / `#` and `$share/<group>/…` work too, and every matching message updates the DPE.
 - Output addresses publish when the DPE changes.
 - `$state` is the connection state: 1 while connected, otherwise 0.
 - After every (re)connect the driver subscribes again, so the broker resends retained values. That works like a general query.
@@ -256,7 +256,7 @@ docker run -d --name rsmqtt-mosq -p 18830:1883 -p 18831:9001 -v "${PWD}\tests\mo
 $env:RSMQTT_TEST_URI="tcp://localhost:18830"; $env:RSMQTT_TEST_WS_URI="ws://localhost:18831"; cargo test
 ```
 
-The broker tests cover v3.1, v3.1.1 and v5 round trips at QoS 0â€“2, WebSocket, TLS (when `RSMQTT_TEST_TLS_URI` and `RSMQTT_TEST_CA` are set), v5 properties and subscription options, will messages, retained messages, offline buffering and error codes. `cargo test -p rsmqtt-wincc` tests the driver logic (addresses, JSON, dyn lists, redundancy names, Sparkplug decoding and commands) without a broker. [examples/cpp](examples/cpp) has a C++ publish/subscribe example and `wincc_test`, which checks that values, strings with NUL bytes, errors and handles cross the `rsmqtt_wincc` C ABI.
+The broker tests cover v3.1, v3.1.1 and v5 round trips at QoS 0–2, WebSocket, TLS (when `RSMQTT_TEST_TLS_URI` and `RSMQTT_TEST_CA` are set), v5 properties and subscription options, will messages, retained messages, offline buffering and error codes. `cargo test -p rsmqtt-wincc` tests the driver logic (addresses, JSON, dyn lists, redundancy names, Sparkplug decoding and commands) without a broker. [examples/cpp](examples/cpp) has a C++ publish/subscribe example and `wincc_test`, which checks that values, strings with NUL bytes, errors and handles cross the `rsmqtt_wincc` C ABI.
 
 ### Connection option tests in WinCC OA
 
@@ -325,12 +325,12 @@ Results on one desktop PC (local mosquitto in Docker; WinCC OA 3.21 DemoApplicat
 | Library, QoS 2, 15k msgs | 21k msg/s, exactly once, in order |
 | Library, 100k topics under one `#` filter | 227k msg/s, every topic delivered |
 | Library, 8 threads on one client, 400k msgs | 274k msg/s, each thread's order kept |
-| Library, 2000 Ã— 256 KiB payloads | 659 MiB/s, content intact |
+| Library, 2000 × 256 KiB payloads | 659 MiB/s, content intact |
 | Library, `maxQueuedEvents=1000`, 200k msgs not polled | queue stays at 1000, the newest are kept, the rest are counted as dropped |
-| Driver, 1M msgs on 500 input DPEs as fast as possible | about 190kâ€“270k msg/s through the driver; every DPE ends at the last value |
-| Driver â†’ Event Manager, default output queue (about 1000 values) | no loss up to 60k value changes/s; from 80k/s the queue overflows and WinCC OA keeps only the newest value per DPE (`_Driver<n>.OV` = TRUE) |
-| Driver â†’ Event Manager, `maxOutputQueueSize = 1000000` | no overflow at 80k, 100k and 150k msg/s steady, nor with a 1M burst; all values in WinCC OA when the generator finished; driver peak memory 33 MB |
-| WinCC OA â†’ driver â†’ broker, 10k output values | all 10k published within 0.4 s |
+| Driver, 1M msgs on 500 input DPEs as fast as possible | about 190k–270k msg/s through the driver; every DPE ends at the last value |
+| Driver → Event Manager, default output queue (about 1000 values) | no loss up to 60k value changes/s; from 80k/s the queue overflows and WinCC OA keeps only the newest value per DPE (`_Driver<n>.OV` = TRUE) |
+| Driver → Event Manager, `maxOutputQueueSize = 1000000` | no overflow at 80k, 100k and 150k msg/s steady, nor with a 1M burst; all values in WinCC OA when the generator finished; driver peak memory 33 MB |
+| WinCC OA → driver → broker, 10k output values | all 10k published within 0.4 s |
 
 Set WinCC OA's driver output queue in the `[rsmqtt]` section of the project config (see the [example](driver/project/config/config.rsmqtt.example)): `maxOutputQueueSize = 1000000`. The default overflows on short spikes; the large value costs memory (about 100 bytes per value) only while a burst is being processed.
 
