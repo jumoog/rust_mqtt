@@ -102,6 +102,20 @@ PVSSboolean RsMqttHWService::start()
   startTime = Clock::now();
   for (auto &c : RsMqttConnections::instance().all())
   {
+    // start() after stop() (e.g. the driver was stopped and started again
+    // without exiting): stop() closed all clients, so create them again.
+    if ( c->stopped )
+    {
+      c->stopped = false;
+      c->lastError.clear();
+      if ( c->source == RsMqttConnection::Source::ConfigFile )
+        createClient(*c);
+      else if ( c->source == RsMqttConnection::Source::Datapoint )
+      {
+        c->dirty = true;
+        c->dirtySince = startTime;
+      }
+    }
     pushState(*c);
     if ( c->source == RsMqttConnection::Source::ConfigFile )
       connect(*c);
@@ -137,6 +151,10 @@ void RsMqttHWService::stop()
     c->client.reset();
     c->connected = false;
     c->connecting = false;
+    c->stopped = true;
+    if ( c->isActive() )
+      c->lastError = "driver stopped";
+    pushState(*c);
     publishBrokerState(*c, true);
   }
   rsmqtt_set_trace_callback(0, nullptr, nullptr);

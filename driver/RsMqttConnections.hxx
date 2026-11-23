@@ -67,6 +67,7 @@ class RsMqttConnection
     bool autoReconnect = true;    // library reconnects lost connections itself
     bool configError = false;     // configuration / client creation failed
     bool statePushNeeded = false; // a $state address was added
+    bool stopped = false;         // HWService::stop() closed the client on purpose
     std::chrono::steady_clock::time_point nextConnectAttempt{};
     std::string lastError;
     std::string serverUri;

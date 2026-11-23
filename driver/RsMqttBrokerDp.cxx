@@ -215,11 +215,14 @@ void RsMqttBrokerIntDp::dpReady()
 
 void RsMqttBrokerIntDp::handleError(const ErrClass *err)
 {
-  // e.g. the DP was deleted: called once per element, so report it once
-  if ( !cfg.active )
+  // e.g. the DP was deleted: called once per element, so act once
+  if ( deleted )
     return;
+  deleted = true;
   ErrHdl::error(ErrClass::PRIO_WARNING, ErrClass::ERR_PARAM, ErrClass::UNEXPECTEDSTATE, "RsMqttBrokerIntDp", "handleError",
-                CharString("broker '") + broker.c_str() + "' disabled: " + (err ? err->getErrorText() : CharString("datapoint error")));
+                CharString("broker '") + broker.c_str() + "' disabled: " +
+                (err ? err->getErrorText() : CharString("datapoint error")) +
+                " (when its datapoint is created again, it is taken over with the next change of the broker list)");
   cfg.active = false;
   markDirty(broker);
 }
@@ -246,12 +249,15 @@ void RsMqttBrokerIntDp::publishState(int connState, const std::string &lastError
     set(outClientId, TextVar(clientId.c_str()));
   if ( withCounters )
   {
-    if ( !published || messagesIn != pubIn )
+    // countersPublished, not published: the first publish may come without
+    // counters, and the DP may still hold the counts of a previous run
+    if ( !countersPublished || messagesIn != pubIn )
       set(outMessagesIn, UIntegerVar(messagesIn));
-    if ( !published || messagesOut != pubOut )
+    if ( !countersPublished || messagesOut != pubOut )
       set(outMessagesOut, UIntegerVar(messagesOut));
     pubIn = messagesIn;
     pubOut = messagesOut;
+    countersPublished = true;
   }
 
   published = true;

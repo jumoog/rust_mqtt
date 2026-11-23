@@ -165,6 +165,7 @@ int RsMqttConnection::connState() const
   // FAILURE needs action (bad configuration); a lost or refused connection
   // that is being retried is DISCONNECTED, with the reason in LastError.
   if ( !isActive() )             return RSMQTT_CS_DISABLED;
+  if ( stopped )                 return RSMQTT_CS_DISCONNECTED;  // driver stop, not a fault
   if ( configError || !client )  return RSMQTT_CS_FAILURE;
   if ( connected )               return RSMQTT_CS_CONNECTED;
   if ( connecting )              return RSMQTT_CS_CONNECTING;
@@ -275,10 +276,20 @@ void RsMqttConnections::setBrokerList(const std::vector<std::string> &names)
                "broker '" + n + "' is configured in the config file and as datapoint; the datapoint is ignored");
       continue;
     }
-    if ( !c->brokerDp )
+    // A broker whose DP was deleted may have been created again: its old
+    // DrvIntDp still holds the deleted DP's ids, so it gets a new one. The
+    // old object stays in brokerDps (DrvIntDp objects must live until exit).
+    if ( !c->brokerDp || c->brokerDp->isDeleted() )
     {
+      bool replaced = (c->brokerDp != nullptr);
       brokerDps.push_back(std::make_unique<RsMqttBrokerIntDp>(n));
       c->brokerDp = brokerDps.back().get();
+      if ( replaced )
+      {
+        logError(ErrClass::PRIO_INFO, "setBrokerList", "broker '" + n + "': datapoint connected again");
+        c->dirty = true;
+        c->dirtySince = std::chrono::steady_clock::now();
+      }
     }
     c->source = RsMqttConnection::Source::Datapoint;
     if ( !c->listed )

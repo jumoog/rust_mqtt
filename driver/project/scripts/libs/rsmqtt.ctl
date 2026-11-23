@@ -257,11 +257,10 @@ int rsmqttAssignBroker(string broker, int driverNum)
   dyn_string brokers;
   dpGet(target + ".Brokers", brokers);
   if ( dynContains(brokers, broker) < 1 )
-  {
     dynAppend(brokers, broker);
-    return dpSetWait(target + ".Brokers", brokers) == 0 ? 0 : -1;
-  }
-  return 0;
+  // Written even when unchanged: the hotlink lets the driver take over a
+  // broker DP that was deleted and created again under the same name.
+  return dpSetWait(target + ".Brokers", brokers) == 0 ? 0 : -1;
 }
 
 /** Removes a broker from its driver and deletes its DP. */

@@ -133,6 +133,9 @@ class RsMqttBrokerIntDp : public DrvIntDp
     void handleError(const ErrClass *err) override;
 
     bool isReady() const { return getState() == Ready; }
+    /// The DP was deleted (or became unusable); this object keeps the old DP
+    /// ids and is replaced when the broker is listed again.
+    bool isDeleted() const { return deleted; }
     const RsMqttBrokerConfig &config() const { return cfg; }
 
     /// Writes the State.* elements (only values that changed); the message
@@ -147,9 +150,11 @@ class RsMqttBrokerIntDp : public DrvIntDp
     std::string broker;
     CharString  names[maxDP];
     RsMqttBrokerConfig cfg;
+    bool        deleted = false;
 
     // last published state, to write only changes
     bool        published = false;
+    bool        countersPublished = false;  // separately: counters go out at most once a second
     int         pubState = -1;
     std::string pubError, pubUri, pubClientId;
     unsigned    pubIn = 0, pubOut = 0;
