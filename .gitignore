@@ -1,3 +1,4 @@
 /target
 /driver/build
 /examples/cpp/build
+/tests/broker/certs

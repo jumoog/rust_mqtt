@@ -168,7 +168,7 @@ void RsMqttHWService::createClient(RsMqttConnection &conn)
 {
   try
   {
-    conn.client = std::make_unique<rsmqtt::Client>(conn.options);
+    conn.client = std::make_unique<rsmqtt::Client>(conn.clientOptions());
     conn.lastError.clear();
     conn.configError = false;
     conn.everConnected = false;

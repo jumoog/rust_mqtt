@@ -34,8 +34,9 @@ pub enum Persistence {
     #[default]
     None,
     Memory,
-    /// File persistence; `None` = current working directory.
-    File(Option<PathBuf>),
+    /// File persistence, in `OptionsData::persistence_dir` (or the current
+    /// working directory).
+    File,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -66,6 +67,10 @@ pub struct OptionsData {
     pub client_id: Option<String>,
     pub mqtt_version: Option<MqttVersion>,
     pub persistence: Persistence,
+    /// Set by an explicit `persistence=`; `persistenceDir` alone implies file
+    /// persistence but never overrides an explicit choice.
+    pub persistence_explicit: bool,
+    pub persistence_dir: Option<PathBuf>,
     pub send_while_disconnected: Option<bool>,
     pub max_buffered_messages: Option<usize>,
     pub allow_disconnected_send_at_any_time: Option<bool>,
@@ -312,18 +317,15 @@ impl OptionsData {
                 self.persistence = match v.trim().to_ascii_lowercase().as_str() {
                     "none" | "0" | "" => Persistence::None,
                     "memory" | "mem" => Persistence::Memory,
-                    "file" | "default" | "1" => match &self.persistence {
-                        Persistence::File(d) => Persistence::File(d.clone()),
-                        _ => Persistence::File(None),
-                    },
+                    "file" | "default" | "1" => Persistence::File,
                     _ => return Err(bad(name, v, "expected none, memory or file")),
-                }
+                };
+                self.persistence_explicit = true;
             }
             "persistencedir" => {
-                self.persistence = if v.trim().is_empty() {
-                    Persistence::File(None)
-                } else {
-                    Persistence::File(Some(PathBuf::from(v.trim())))
+                self.persistence_dir = opt_string(v.trim()).map(PathBuf::from);
+                if !self.persistence_explicit {
+                    self.persistence = Persistence::File;
                 }
             }
             "sendwhiledisconnected" => self.send_while_disconnected = Some(parse_bool(name, v)?),
@@ -498,8 +500,10 @@ impl OptionsData {
         b = match &self.persistence {
             Persistence::None => b.persistence(mqtt::PersistenceType::None),
             Persistence::Memory => b.persistence(mqtt::MemPersistence::new()),
-            Persistence::File(None) => b.persistence(mqtt::PersistenceType::File),
-            Persistence::File(Some(dir)) => b.persistence(mqtt::PersistenceType::FilePath(dir.clone())),
+            Persistence::File => match &self.persistence_dir {
+                None => b.persistence(mqtt::PersistenceType::File),
+                Some(dir) => b.persistence(mqtt::PersistenceType::FilePath(dir.clone())),
+            },
         };
         if let Some(v) = self.send_while_disconnected {
             b = b.send_while_disconnected(v);
@@ -722,6 +726,24 @@ mod tests {
         let c = o.connect_options().unwrap();
         assert_eq!(c.keep_alive_interval, Duration::from_secs(20));
         assert!(!c.clean_session());
+    }
+
+    #[test]
+    fn persistence_dir_never_overrides_an_explicit_type() {
+        let kind = |opts: &[(&str, &str)]| {
+            let mut o = OptionsData::default();
+            for (n, v) in opts {
+                o.set(n, v).unwrap();
+            }
+            (o.persistence, o.persistence_dir)
+        };
+        let dir = Some(PathBuf::from("d"));
+        assert!(matches!(kind(&[("persistenceDir", "d")]), (Persistence::File, ref d) if *d == dir));
+        assert!(matches!(kind(&[("persistence", "memory"), ("persistenceDir", "d")]), (Persistence::Memory, _)));
+        assert!(matches!(kind(&[("persistenceDir", "d"), ("persistence", "memory")]), (Persistence::Memory, _)));
+        assert!(matches!(kind(&[("persistence", "none"), ("persistenceDir", "d")]), (Persistence::None, _)));
+        assert!(matches!(kind(&[("persistenceDir", "d"), ("persistence", "file")]), (Persistence::File, ref d) if *d == dir));
+        assert!(matches!(kind(&[("persistence", "file")]), (Persistence::File, None)));
     }
 
     #[test]

@@ -7,6 +7,7 @@
 #include <Resources.hxx>
 
 #include <cctype>
+#include <filesystem>
 
 // TLS transports, as in paho.mqtt.rust's is_secure_uri()
 static bool anySecureUri(const std::string &uri, const std::vector<std::string> &more)
@@ -46,16 +47,49 @@ bool RsMqttConnection::isSecretOption(const std::string &name)
   return normalizedOptionName(name) == "password";
 }
 
+static std::string trimmed(const std::string &s)
+{
+  // the same characters as Rust's str::trim() in rsmqtt (ASCII part)
+  const char *ws = " \t\r\n\v\f";
+  size_t b = s.find_first_not_of(ws), e = s.find_last_not_of(ws);
+  return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
+}
+
 void RsMqttConnection::noteOption(const std::string &name, const std::string &value)
 {
   std::string n = normalizedOptionName(name);
+  std::string v;
+  for (char ch : trimmed(value))
+    v += (char) std::tolower((unsigned char) ch);
   if ( n == "automaticreconnect" )
-  {
-    std::string v;
-    for (char ch : value)
-      v += (char) std::tolower((unsigned char) ch);
     autoReconnect = (v == "1" || v == "true" || v == "yes" || v == "on");
+  else if ( n == "persistence" )
+    persistence = (v == "file" || v == "default" || v == "1") ? 1 : 0;  // same names as rsmqtt
+  else if ( n == "persistencedir" )
+  {
+    persistenceDirSet = true;
+    persistenceDir = trimmed(value);
   }
+}
+
+rsmqtt::Options RsMqttConnection::clientOptions() const
+{
+  // as in rsmqtt: persistenceDir alone means file, an explicit persistence= wins
+  bool file = persistence == 1 || (persistence == -1 && persistenceDirSet);
+  if ( !file )
+    return options;
+
+  std::filesystem::path dir = std::filesystem::u8path(persistenceDir);
+  if ( dir.empty() || dir.is_relative() )
+  {
+    std::filesystem::path data = std::filesystem::u8path((const char *) Resources::getDataDir());
+    dir = dir.empty() ? data / "rsmqtt" : data / dir;
+  }
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);  // paho reports a folder it cannot use
+  rsmqtt::Options o = options;
+  o.set("persistenceDir", dir.lexically_normal().generic_u8string());
+  return o;
 }
 
 //--------------------------------------------------------------------------------
@@ -95,6 +129,9 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
 
     rsmqtt::Options o = defaultOptions(name);
     autoReconnect = true;  // driver default, see defaultOptions()
+    persistence = -1;
+    persistenceDirSet = false;
+    persistenceDir.clear();
     o.set("serverURI", cfg.serverURI.empty() ? cfg.serverURIs.front() : cfg.serverURI);
     if ( !cfg.serverURIs.empty() )
     {

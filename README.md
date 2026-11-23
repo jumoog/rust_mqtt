@@ -178,6 +178,16 @@ rsmqttSetAddress("Pump1.online",   "plant:$state",                      RSMQTT_B
 
 Driver defaults for every connection, all of which can be overridden: `automaticReconnect=1`, `sendWhileDisconnected=1`, `maxBufferedMessages=10000`, `deleteOldestMessages=1`, and only failed operations are reported (`completionEvents=errors`).
 
+Where options behave differently from Paho C (paho.mqtt.rust with rustls):
+
+- `persistence=file` stores QoS 1/2 publishes that are in flight (sent, not yet acknowledged); after a restart of the driver they are sent again. Values written while the connection is already down wait in the send-while-disconnected buffer, which is kept in memory and is lost when the process ends. The driver keeps the files in `<project>/data/rsmqtt`; `persistenceDir` sets another folder, a relative one under `<project>/data`. `persistenceDir` alone selects file persistence; an explicit `persistence=none|memory` wins.
+- `maxBufferedMessages` is at least 4; smaller values count as 4.
+- `ssl.sslVersion` is a minimum. rustls has no TLS 1.0/1.1, so `1`/`2` still negotiate TLS 1.2 or 1.3.
+- `ssl.enabledCipherSuites` takes rustls names (`TLS13_AES_256_GCM_SHA384`, `TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256`, ...).
+- Encrypted private keys (`ssl.privateKeyPassword`) are not supported; the connection fails with a clear error.
+- `httpProxy` / `httpsProxy` apply to `ws://` / `wss://` only; `tcp://` and `ssl://` connect directly.
+- MQTT 5: `CleanSession=FALSE` keeps the session only together with `sessionExpiryInterval=<s>` in `Config.Options` (the expiry defaults to 0, so the session ends with the connection).
+
 ## Tests
 
 ```powershell
@@ -189,6 +199,40 @@ $env:RSMQTT_TEST_URI="tcp://localhost:18830"; $env:RSMQTT_TEST_WS_URI="ws://loca
 ```
 
 The broker tests cover v3.1, v3.1.1 and v5 round trips at QoS 0â€“2, WebSocket, TLS (when `RSMQTT_TEST_TLS_URI` and `RSMQTT_TEST_CA` are set), v5 properties and subscription options, will messages, retained messages, offline buffering and error codes. [examples/cpp](examples/cpp) has a C++ publish/subscribe example and the unit test for the driver's address parser.
+
+### Connection option tests in WinCC OA
+
+[tests/winccoa/option_tests.ctl](tests/winccoa/option_tests.ctl) runs the driver (number 3) against a local mosquitto with every listener type, one group at a time:
+
+```powershell
+powershell -File tests/broker/start-broker.ps1
+```
+
+```powershell
+python tests/broker/netutil.py
+```
+
+[start-broker.ps1](tests/broker/start-broker.ps1) creates test certificates ([make-certs.sh](tests/broker/make-certs.sh), Git Bash) and starts `rsmqtt-mosq-full` with MQTT, WebSocket, TLS, WSS, TLS with client certificates and a password listener on ports 18840–18845. [netutil.py](tests/broker/netutil.py) provides HTTP CONNECT proxies (18850, 18851 with credentials), a server that never answers (18852) and a forwarder that can be frozen (18853). Run a group from any CTRL manager, e.g. with the WinCC OA MCP `ctrl-eval`:
+
+```
+string src; fileToString("C:/Repos/rust_mqtt/tests/winccoa/option_tests.ctl", src);
+anytype res; evalScript(res, src, makeDynString(), "tls"); return res;
+```
+
+| Group | Covers |
+|---|---|
+| `transport` | tcp, mqtt, ws (with path), ssl, tls, mqtts, wss; MQTT 3.1, 3.1.1, 5 |
+| `auth` | user name and password (also via `Config.Options`), wrong and missing credentials |
+| `tls` | CA file and directory, foreign CA, system store, host name check (`TlsVerify`), `enableServerCertAuth`, `disableDefaultTrustStore`, mutual TLS (separate and combined PEM), encrypted key, cipher suites, TLS versions, ALPN |
+| `ws` | `httpHeader`, `httpProxy` / `httpsProxy` with and without credentials |
+| `connect` | `connectTimeout`, `ServerURIs` fail-over, empty client id, keep alive, runtime/event options, `maxInflight`, unknown option, bad value |
+| `v5` | CONNECT properties, `maximumPacketSize` |
+| `session` | clean session / clean start with and without session expiry |
+| `buffer` | keep alive detects a hung broker, automatic reconnect, `maxBufferedMessages` + `deleteOldestMessages` |
+| `will_arm`, `will_check` | will with retain, QoS 1 and v5 properties; kill `WCCOArsmqtt` between the two |
+| `persist_arm`, `persist_down`, `persist_check` | `persistence=file`: kill the driver after `persist_arm`, run `persist_down`, start the driver, then `persist_check` |
+
+Each group returns `PASS`/`FAIL`/`INFO` lines and removes its broker DPs afterwards.
 
 ### Stress tests
 

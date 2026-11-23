@@ -42,6 +42,9 @@ class RsMqttConnection
     int             publishQoS = 1;   // default QoS of output addresses
     bool            publishRetain = false;
     std::chrono::milliseconds reconnectInterval{10000};  // retry of failed connects
+    int             persistence = -1; // explicit persistence=: -1 not set, 0 none/memory, 1 file
+    bool            persistenceDirSet = false;
+    std::string     persistenceDir;
 
     // ----- datapoint configuration
     RsMqttBrokerIntDp *brokerDp = nullptr;  // owned by RsMqttConnections, never deleted
@@ -53,8 +56,13 @@ class RsMqttConnection
     /// Builds `options` and the driver settings from a broker DP.
     bool applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::string &err);
 
-    /// Remembers settings the driver itself must know about (automaticReconnect).
+    /// Remembers settings the driver itself must know about (automaticReconnect,
+    /// persistence). Call it for every option set on `options`.
     void noteOption(const std::string &name, const std::string &value);
+
+    /// `options` as the client gets them: file persistence goes to
+    /// <project>/data/rsmqtt, or to a relative persistenceDir under <project>/data.
+    rsmqtt::Options clientOptions() const;
 
     /// Options whose value may be encrypted with _DriverSecurity.PublicKey (see RsMqttSecret.hxx).
     static bool isSecretOption(const std::string &name);

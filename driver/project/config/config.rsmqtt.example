@@ -58,9 +58,9 @@ ssl.keyStore = "C:/WinCC_OA_Proj/myproj/config/certs/client.pem"
 ssl.privateKey = "C:/WinCC_OA_Proj/myproj/config/certs/client.key"
 # also check the host name
 ssl.verify = 1
-# keep QoS 1/2 in-flight messages across restarts
+# keep QoS 1/2 in-flight messages across restarts, in <project>/data/rsmqtt
+# (persistenceDir = "<folder>" sets another one; a relative folder is under <project>/data)
 persistence = "file"
-persistenceDir = "C:/WinCC_OA_Proj/myproj/data/rsmqtt"
 
 # ---------------------------------------------------------------- WebSocket via proxy
 connection = "ws"

@@ -160,7 +160,9 @@ void        rsmqtt_set_trace_callback(int level, rsmqtt_trace_fn cb, void *ctx);
 /*
  * Create options:  serverURI clientId MQTTVersion(0|3|4|5|3.1|3.1.1|5)
  *                  persistence(none|memory|file) persistenceDir
- *                  sendWhileDisconnected maxBufferedMessages
+ *                  (persistenceDir alone selects file; an explicit
+ *                  persistence= wins, whatever the order)
+ *                  sendWhileDisconnected maxBufferedMessages(>= 4)
  *                  allowDisconnectedSendAtAnyTime deleteOldestMessages
  *                  restoreMessages persistQoS0 runtimeThreads
  *                  completionEvents(all|errors|none) maxQueuedEvents
