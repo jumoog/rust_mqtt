@@ -156,7 +156,7 @@ fn run_pub(a: &Args) {
 fn run_sub(a: &Args) {
     let c = connect(&a.uri, &[]);
     let tok = c
-        .subscribe_many(&[a.filter.clone()], &[qos(a.qos)], &[paho_mqtt::SubscribeOptions::default()], None)
+        .subscribe_many(std::slice::from_ref(&a.filter), &[qos(a.qos)], &[paho_mqtt::SubscribeOptions::default()], None)
         .unwrap_or_else(|e| fail(&e.message));
     c.wait_for_completion(tok, Duration::from_secs(10)).unwrap_or_else(|e| fail(&e.message));
     println!("subscribed to {} - waiting for messages", a.filter);
