@@ -107,7 +107,7 @@ ChildPanelOnCentralModalReturn("para/rsmqtt_brokers.pnl", "MQTT brokers",
 
 - Pick a broker, or press **New** and type a name. The form covers every `Config.*` element.
 - **Save** checks the input, creates the DP if needed and adds the broker to the selected driver's `Brokers` list (removing it from any other driver's).
-- **Reconnect** and **Delete** (with confirmation) act on the selected broker. A deleted broker can be created again under the same name while the driver runs. If you delete and re-create a broker DP by hand instead, write `_RsMqttDriver_<n>.Brokers` again (or restart the driver) so the driver takes over the new DP. To delete one by hand, remove it from `Brokers` first and delete the DP a second later (as `rsmqttDeleteBroker()` does): the driver lets go of a broker's DP once it leaves the list, while a DP deleted under a running connection makes WinCC OA log one warning 107 ("Automatic disconnect") per element.
+- **Reconnect** and **Delete** (with confirmation) act on the selected broker. A deleted broker can be created again under the same name while the driver runs. If you delete and re-create a broker DP by hand instead, write `_RsMqttDriver_<n>.Brokers` again (or restart the driver) so the driver takes over the new DP. To delete one by hand, remove it from `Brokers` first and delete the DP a second later (as `rsmqttDeleteBroker()` does): the driver lets go of a broker's DP once it leaves the list, while a DP deleted while its broker is still listed makes WinCC OA log one warning 107 ("Automatic disconnect") per element.
 - The state line updates every second: connection state in colour, last error, URI, client ID and message counters.
 
 From CTRL:

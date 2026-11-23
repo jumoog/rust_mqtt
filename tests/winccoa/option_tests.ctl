@@ -106,7 +106,7 @@ void removeBroker(string name)
   dpGet(DRV_DP + ".Brokers", list);
   int pos = dynContains(list, name);
   if ( pos > 0 ) { dynRemove(list, pos); dpSetWait(DRV_DP + ".Brokers", list); }
-  delay(0, 500);
+  delay(1);   // as rsmqttDeleteBroker(): the driver lets go of the DP first (no warning 107 per element)
   if ( dpExists("_RsMqtt_" + name) ) dpDelete("_RsMqtt_" + name);
 }
 
@@ -329,6 +329,24 @@ void connect()
   expectConnected("maxInflight=1", "o_infl", makeMapping("ServerURI", "tcp://localhost:18840", "Options", makeDynString("maxInflight=1")));
   expectRefused("unknown option name", "o_badopt", makeMapping("ServerURI", "tcp://localhost:18840", "Options", makeDynString("noSuchOption=1")), "unknown option");
   expectRefused("bad option value", "o_badval", makeMapping("ServerURI", "tcp://localhost:18840", "Options", makeDynString("keepAliveInterval=abc")), "");
+
+  // leaving the list releases the broker DP; listing it again connects a new one
+  broker("o_relist", makeMapping("ServerURI", "tcp://localhost:18840"));
+  string s1 = waitState("o_relist", 3, 8);
+  dyn_string list; dpGet(DRV_DP + ".Brokers", list);
+  dynRemove(list, dynContains(list, "o_relist"));
+  dpSetWait(DRV_DP + ".Brokers", list);
+  string s2 = waitState("o_relist", 0, 5);
+  delay(1);
+  dpSetWait("_RsMqtt_o_relist.Config.KeepAlive", 20);   // while unlisted: picked up when listed again
+  dynAppend(list, "o_relist");
+  dpSetWait(DRV_DP + ".Brokers", list);
+  string s3 = waitState("o_relist", 3, 8);
+  dpSetWait("_RsMqtt_o_relist.State.ConnState", 0);      // overwritten by the next state write
+  dpSetWait("_RsMqtt_o_relist.Command.Reconnect", TRUE);
+  string s4 = waitState("o_relist", 3, 8);
+  result("unlisted and listed again (same DP): connects, Reconnect works",
+         stateOf(s1) == 3 && stateOf(s2) == 0 && stateOf(s3) == 3 && stateOf(s4) == 3, s1 + " / " + s2 + " / " + s3 + " / " + s4);
   cleanup();
 }
 

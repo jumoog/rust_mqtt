@@ -179,8 +179,8 @@ class RsMqttConnections
 
   private:
     std::vector<std::unique_ptr<RsMqttConnection>> list;
-    // the broker DP objects; one whose DP was deleted stays until exit (its
-    // hotlinks are gone, a dpDisconnect would only fail)
+    // the broker DP objects; one whose DP was deleted stays until exit (the
+    // event manager already dropped its hotlinks, there is nothing to release)
     std::vector<std::unique_ptr<RsMqttBrokerIntDp>> brokerDps;
     std::map<std::string, std::pair<RsMqttAddress, int>> addresses; // full address -> (parsed, refs)
 };
