@@ -227,6 +227,9 @@ void RsMqttHWService::reconfigure(RsMqttConnection &conn)
     {
       log(ErrClass::PRIO_INFO, "reconfigure", "[" + conn.name + "] broker disabled");
       publishBrokerState(conn, true);
+      // no longer listed: let go of its DP, which is usually deleted next
+      if ( !conn.listed )
+        RsMqttConnections::instance().releaseBrokerDp(conn);
       return;
     }
     std::string err;

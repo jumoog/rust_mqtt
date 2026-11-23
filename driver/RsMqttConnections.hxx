@@ -54,7 +54,7 @@ class RsMqttConnection
     std::string     persistenceDir;
 
     // ----- datapoint configuration
-    RsMqttBrokerIntDp *brokerDp = nullptr;  // owned by RsMqttConnections, never deleted
+    RsMqttBrokerIntDp *brokerDp = nullptr;  // owned by RsMqttConnections (releaseBrokerDp)
     bool listed = false;                    // in _RsMqttDriver_<num>.Brokers
     bool dirty = false;                     // configuration changed, re-create the client
     std::chrono::steady_clock::time_point dirtySince{};
@@ -161,6 +161,12 @@ class RsMqttConnections
     /// New content of _RsMqttDriver_<num>.Brokers.
     void setBrokerList(const std::vector<std::string> &names);
 
+    /// Disconnects from the broker DP of a broker that left the list, so that
+    /// deleting the DP afterwards does not report a hotlink error per element
+    /// (~DrvIntDp calls dpDisconnect). Call from the work loop, not from a
+    /// DrvIntDp callback. Listing the broker again connects a new object.
+    void releaseBrokerDp(RsMqttConnection &conn);
+
     /// Registers an address of a DPE. Returns true if this full address is
     /// new (the caller creates the HWObject for it).
     bool addAddress(const std::string &fullAddress, const RsMqttAddress &addr, bool input);
@@ -173,7 +179,9 @@ class RsMqttConnections
 
   private:
     std::vector<std::unique_ptr<RsMqttConnection>> list;
-    std::vector<std::unique_ptr<RsMqttBrokerIntDp>> brokerDps;  // DrvIntDp objects must live until exit
+    // the broker DP objects; one whose DP was deleted stays until exit (its
+    // hotlinks are gone, a dpDisconnect would only fail)
+    std::vector<std::unique_ptr<RsMqttBrokerIntDp>> brokerDps;
     std::map<std::string, std::pair<RsMqttAddress, int>> addresses; // full address -> (parsed, refs)
 };
 

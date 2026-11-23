@@ -424,7 +424,8 @@ void RsMqttConnections::setBrokerList(const std::vector<std::string> &names)
     }
     // A broker whose DP was deleted may have been created again: its old
     // DrvIntDp still holds the deleted DP's ids, so it gets a new one. The
-    // old object stays in brokerDps (DrvIntDp objects must live until exit).
+    // old object stays in brokerDps. A broker that left the list has none
+    // (releaseBrokerDp) and gets a new one as well.
     if ( !c->brokerDp || c->brokerDp->isDeleted() )
     {
       bool replaced = (c->brokerDp != nullptr);
@@ -453,6 +454,21 @@ void RsMqttConnections::setBrokerList(const std::vector<std::string> &names)
       c->listed = false;
       c->dirty = true;
       c->dirtySince = std::chrono::steady_clock::now();
+    }
+  }
+}
+
+void RsMqttConnections::releaseBrokerDp(RsMqttConnection &conn)
+{
+  if ( !conn.brokerDp || conn.brokerDp->isDeleted() )
+    return;
+  for (auto it = brokerDps.begin(); it != brokerDps.end(); ++it)
+  {
+    if ( it->get() == conn.brokerDp )
+    {
+      conn.brokerDp = nullptr;
+      brokerDps.erase(it);  // ~DrvIntDp: dpDisconnect per element
+      return;
     }
   }
 }

@@ -239,7 +239,7 @@ void RsMqttBrokerIntDp::publishState(int connState, const std::string &lastError
                                      const std::string &clientId, unsigned messagesIn, unsigned messagesOut,
                                      bool withCounters)
 {
-  if ( !isReady() || getError() )
+  if ( !isReady() || getError() || deleted )  // deleted: the event manager would reject every value
     return;
 
   auto set = [this](int idx, const Variable &v) {

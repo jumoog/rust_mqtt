@@ -190,6 +190,11 @@ string mosqPub(string args) { return sh("docker exec " + BROKER_CONTAINER + " mo
 
 void cleanup()
 {
+  // the groups share TEST_DP: drop its addresses with the brokers they use,
+  // or the driver keeps a placeholder broker for them and warns about it
+  dyn_string shared = makeDynString(TEST_DP + ".in", TEST_DP + ".out");
+  for (int i = 1; i <= dynlen(shared); i++)
+    dpSetWait(shared[i] + ":_address.._type", DPCONFIG_NONE, shared[i] + ":_distrib.._type", DPCONFIG_NONE);
   for (int i = 1; i <= dynlen(gBrokers); i++)
     removeBroker(gBrokers[i]);
   dynClear(gBrokers);
