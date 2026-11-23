@@ -4,6 +4,7 @@
 // maxPayload = 65536            # max. size of a published value (bytes)
 // traceLevel = 0                # rsmqtt/Paho trace into the log, 0..5
 // driverDp = "_RsMqttDriver_2"  # DP listing the broker DPs (default _RsMqttDriver_<num>)
+// serviceApi = 1                # MSA service "RsMqtt" for CTRL (rsmqttService.ctl), 0 turns it off
 //
 // Brokers can be datapoints (_RsMqttBroker, see RsMqttBrokerDp.hxx) and/or
 // be configured here:
@@ -36,12 +37,14 @@ class RsMqttResources : public DrvResources
 
     static unsigned getMaxPayload() { return maxPayload; }
     static int      getTraceLevel() { return traceLevel; }
+    static bool     getServiceApi() { return serviceApi; }
     /// _RsMqttDriver DP listing the brokers (default _RsMqttDriver_<num>)
     static const CharString &getDriverDp() { return driverDp; }
 
   private:
     static unsigned maxPayload;
     static int      traceLevel;
+    static bool     serviceApi;
     static CharString driverDp;
     static RsMqttConnection *current;
 };

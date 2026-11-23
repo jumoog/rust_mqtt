@@ -16,6 +16,9 @@
 maxPayload = 65536
 # Library trace into the log: 0 off, 1 error, 2 warn, 3 info, 4 debug, 5 trace
 traceLevel = 0
+# Service "RsMqtt" (Manager Service API) for rsmqttService.ctl: MQTT topics
+# with CTRL callbacks and rsmqttPublish(). 0 turns it off. Default 1.
+# serviceApi = 1
 # WinCC OA driver setting: output queue to the Event Manager, in values.
 # The default (number of addresses, at least 1000) overflows on message bursts;
 # WinCC OA then keeps only the newest value per DPE (_Driver<num>.OV = TRUE).

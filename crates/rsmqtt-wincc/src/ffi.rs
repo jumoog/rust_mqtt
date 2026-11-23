@@ -1014,6 +1014,60 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_remove(
     })
 }
 
+/// Registers a subscription of the MSA service: 1 and `*filter` to
+/// subscribe, 0 nothing to do, -1 and rsmqtt_wincc_last_error() for an
+/// invalid filter.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_add_service(
+    r: *mut RsmqttWinccRouter,
+    id: u64,
+    filter: *const c_char,
+    qos: c_int,
+    out: *mut RsmqttWinccBuf,
+) -> c_int {
+    guard(-1, || {
+        let r = r.as_mut().ok_or("null router")?;
+        Ok(match r.r.add_service(id, &text(filter), qos)? {
+            Some(f) => {
+                put(out, f.into_bytes());
+                1
+            }
+            None => 0,
+        })
+    })
+}
+
+/// Unregisters a subscription of the MSA service: 1 and `*filter` to unsubscribe, else 0.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_remove_service(r: *mut RsmqttWinccRouter, id: u64, out: *mut RsmqttWinccBuf) -> c_int {
+    guard(0, || {
+        let r = r.as_mut().ok_or("null router")?;
+        Ok(match r.r.remove_service(id) {
+            Some(f) => {
+                put(out, f.into_bytes());
+                1
+            }
+            None => 0,
+        })
+    })
+}
+
+/// The service subscriptions (ids) the last message is for; `*text`: its
+/// payload is UTF-8 without NUL bytes.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_service(r: *const RsmqttWinccRouter, count: *mut usize, text: *mut c_int) -> *const u64 {
+    guard(ptr::null(), || {
+        let r = r.as_ref().ok_or("null router")?;
+        if let Some(c) = count.as_mut() {
+            *c = r.out.service.len();
+        }
+        if let Some(t) = text.as_mut() {
+            *t = r.out.service_text as c_int;
+        }
+        Ok(r.out.service.as_ptr())
+    })
+}
+
 /// 1 and QoS / flags of a subscription, 0 if there is none for this filter.
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_filter(

@@ -24,6 +24,7 @@ namespace
 
 unsigned          RsMqttResources::maxPayload = 65536;
 int               RsMqttResources::traceLevel = 0;
+bool              RsMqttResources::serviceApi = true;
 RsMqttConnection *RsMqttResources::current = nullptr;
 CharString        RsMqttResources::driverDp;
 
@@ -117,6 +118,12 @@ PVSSboolean RsMqttResources::readSection()
     }
     else if ( kw.icmp("traceLevel") == 0 )
       getCfgStream() >> traceLevel;
+    else if ( kw.icmp("serviceApi") == 0 )
+    {
+      int on = 1;
+      getCfgStream() >> on;
+      serviceApi = on != 0;
+    }
     else if ( kw.icmp("simulateReduHost") == 0 )
     {
       // tests only: act as host 1 or 2 of a redundant pair on a single system

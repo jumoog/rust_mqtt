@@ -636,6 +636,11 @@ namespace rsmqtt::wincc
         std::vector<Publish> publish;
         std::vector<std::pair<const char *, int>> subscribe;   // (filter, QoS)
         std::vector<std::pair<bool, const char *>> warnings;   // (from Sparkplug, text)
+        // message(): the MSA service subscriptions it is for (one copy per
+        // message), and whether its payload is UTF-8 text without NUL bytes
+        const uint64_t *service = nullptr;
+        size_t          serviceCount = 0;
+        bool            serviceText = false;
       };
 
       Router() : r(rsmqtt_wincc_router_new()) {}
@@ -657,6 +662,30 @@ namespace rsmqtt::wincc
         if ( rc == RSMQTT_WINCC_ADDED_SUBSCRIBE )
           filter = take(b);
         return (Added) rc;
+      }
+
+      /// Registers a subscription of the MSA service; true: subscribe `filter`.
+      /// False with `err` for an invalid filter, else false: nothing to do.
+      bool addService(uint64_t id, const std::string &filter, int qos, std::string &subscribe, std::string &err)
+      {
+        rsmqtt_wincc_buf b{};
+        int rc = rsmqtt_wincc_router_add_service(r, id, filter.c_str(), qos, &b);
+        if ( rc < 0 )
+          err = lastError();
+        if ( rc != 1 )
+          return false;
+        subscribe = take(b);
+        return true;
+      }
+
+      /// Unregisters a subscription of the MSA service; true: unsubscribe `filter`.
+      bool removeService(uint64_t id, std::string &filter)
+      {
+        rsmqtt_wincc_buf b{};
+        if ( rsmqtt_wincc_router_remove_service(r, id, &b) != 1 )
+          return false;
+        filter = take(b);
+        return true;
       }
 
       /// Unregisters an address; true: unsubscribe `filter`.
@@ -789,6 +818,9 @@ namespace rsmqtt::wincc
           const char *w = rsmqtt_wincc_router_warning_get(r, i, &spb);
           out.warnings.emplace_back(spb != 0, w);
         }
+        int text = 0;
+        out.service = rsmqtt_wincc_router_service(r, &out.serviceCount, &text);
+        out.serviceText = text != 0;
         return out;
       }
 

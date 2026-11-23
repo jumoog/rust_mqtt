@@ -93,6 +93,9 @@ class RsMqttConnection
     /// Sends SUBSCRIBE for all registered filters.
     void subscribeAll();
     void unsubscribe(const std::string &filter);
+    /// Publishes a message (counted in messagesOut); false and `err` without
+    /// a client or if the client refuses it.
+    bool publish(const std::string &topic, std::string_view payload, int qos, bool retain, std::string &err);
 };
 
 class RsMqttConnections
