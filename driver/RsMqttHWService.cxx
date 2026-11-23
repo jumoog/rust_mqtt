@@ -3,6 +3,8 @@
 #include "RsMqttConnections.hxx"
 #include "RsMqttRedu.hxx"
 #include "RsMqttResources.hxx"
+#include "RsMqttService.hxx"
+#include "RsMqttTime.hxx"
 #include "RsMqttSparkplug.hxx"
 
 #include <DrvManager.hxx>
@@ -106,6 +108,8 @@ PVSSboolean RsMqttHWService::initialize(int, char *[])
 
 PVSSboolean RsMqttHWService::start()
 {
+  if ( RsMqttResources::getServiceApi() )
+    RsMqttService::start();
   started = true;
   startTime = Clock::now();
   for (auto &c : RsMqttConnections::instance().all())
@@ -284,8 +288,12 @@ void RsMqttHWService::connect(RsMqttConnection &conn)
 void RsMqttHWService::workProc()
 {
   drainTrace();
+  RsMqttService *service = RsMqttService::get();
   if ( !started )
+  {
+    if ( service ) service->workProc();
     return;
+  }
 
   auto now = Clock::now();
   for (auto &c : RsMqttConnections::instance().all())
@@ -322,6 +330,10 @@ void RsMqttHWService::workProc()
 
     publishBrokerState(*c, false);
   }
+
+  // after handleEvents: held Receive calls get this round's messages
+  if ( service )
+    service->workProc();
 }
 
 //--------------------------------------------------------------------------------
@@ -367,7 +379,7 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
         DEBUG_DRV_USR2("rsmqtt [" << conn.name.c_str() << "] message " << topic.c_str()
                        << " (" << (int) ev->payload().size() << " bytes)");
         conn.messagesIn++;
-        deliverMessage(conn, topic, ev->payload());
+        deliverMessage(conn, topic, ev->payload(), ev->qos(), ev->retained());
         break;
       }
 
@@ -472,16 +484,6 @@ void RsMqttHWService::deliver(const char *address, std::string_view payload, con
     DrvManager::getSelfPtr()->toDp(&obj, addrObj);
 }
 
-static int64_t nowMs()
-{
-  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-}
-
-static TimeVar timeOfMs(int64_t ms)
-{
-  long long sec = ms >= 0 ? ms / 1000 : -((-ms + 999) / 1000);
-  return TimeVar((time_t) sec, (PVSSshort) (ms - sec * 1000));
-}
 
 void RsMqttHWService::apply(RsMqttConnection &conn, const rsmqtt::wincc::Router::Outcome &out, std::string_view payload)
 {
@@ -518,13 +520,19 @@ void RsMqttHWService::apply(RsMqttConnection &conn, const rsmqtt::wincc::Router:
     }
   }
   for (const auto &d : out.deliveries)
-    deliver(d.address, d.hasValue ? d.value : payload, d.hasTime ? timeOfMs(d.timeMs) : TimeVar(), d.periphTime,
+    deliver(d.address, d.hasValue ? d.value : payload, d.hasTime ? rsmqttTimeOfMs(d.timeMs) : TimeVar(), d.periphTime,
             d.validity);
 }
 
-void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
+void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload,
+                                     int qos, bool retained)
 {
-  apply(conn, conn.router.message(topic, payload, nowMs(), conn.spbStateHost(), conn.settings.stateTs()), payload);
+  const auto &out = conn.router.message(topic, payload, rsmqttNowMs(), conn.spbStateHost(), conn.settings.stateTs());
+  apply(conn, out, payload);
+  // the MSA service subscriptions the router found for it
+  if ( out.serviceCount )
+    if ( RsMqttService *service = RsMqttService::get() )
+      service->onMessage(out, topic, payload, qos, retained);
 }
 
 //--------------------------------------------------------------------------------
@@ -619,7 +627,7 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
   int64_t timeMs = (int64_t) tm.getSeconds() * 1000 + tm.getMilli();
   rsmqtt::wincc::Router::Write w;
   std::string err;
-  if ( !conn->router.write(name, value, (int) objPtr->getType(), timeMs, nowMs(), conn->settings.publishQoS(),
+  if ( !conn->router.write(name, value, (int) objPtr->getType(), timeMs, rsmqttNowMs(), conn->settings.publishQoS(),
                            conn->settings.publishRetain(), w, err) )
   {
     log(ErrClass::PRIO_WARNING, "writeData", err);
@@ -629,15 +637,10 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
   if ( !addr->sparkplug && Resources::isDbgFlag(Resources::DBG_DRV_USR1) )
     objPtr->debugPrint();
 
-  try
-  {
-    conn->client->publish(w.topic, w.payload, w.qos, w.retain);
-    conn->messagesOut++;
-  }
-  catch (const rsmqtt::Error &e)
+  if ( !conn->publish(w.topic, w.payload, w.qos, w.retain, err) )
   {
     log(ErrClass::PRIO_WARNING, "writeData", "[" + conn->name + "] " +
-        (addr->sparkplug ? w.topic + ": " : "publish to '" + w.topic + "' failed: ") + e.what());
+        (addr->sparkplug ? w.topic + ": " : "publish to '" + w.topic + "' failed: ") + err);
     return PVSS_FALSE;
   }
   return PVSS_TRUE;

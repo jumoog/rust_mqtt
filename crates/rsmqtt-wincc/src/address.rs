@@ -76,6 +76,37 @@ pub fn is_wildcard_filter(filter: &str) -> bool {
     has_wildcards(filter) || filter.starts_with("$share/")
 }
 
+/// Checks a topic filter for SUBSCRIBE: not empty, no NUL, wildcards as
+/// whole levels, `$share/<group>/<filter>` with a group without wildcards.
+pub fn check_filter(filter: &str) -> Result<(), String> {
+    if filter.is_empty() {
+        return Err("empty topic filter".into());
+    }
+    if filter.contains('\0') {
+        return Err("a topic filter must not contain NUL".into());
+    }
+    if let Some(rest) = filter.strip_prefix("$share/") {
+        let (group, inner) = rest.split_once('/').unwrap_or((rest, ""));
+        if group.is_empty() || has_wildcards(group) {
+            return Err("$share/<group>/<filter>: the group must not be empty or contain + #".into());
+        }
+        if inner.is_empty() {
+            return Err("$share/<group>/<filter>: empty filter".into());
+        }
+    }
+    // '#' only as the last level, '+' only as a whole level
+    let tb = filter.as_bytes();
+    for (i, &c) in tb.iter().enumerate() {
+        if c == b'#' && (i + 1 != tb.len() || (i > 0 && tb[i - 1] != b'/')) {
+            return Err("'#' must be the last level of a topic filter".into());
+        }
+        if c == b'+' && ((i > 0 && tb[i - 1] != b'/') || (i + 1 < tb.len() && tb[i + 1] != b'/')) {
+            return Err("'+' must occupy a whole topic level".into());
+        }
+    }
+    Ok(())
+}
+
 /// MQTT topic matching (including $share/<group>/ filters and the rule that
 /// wildcards at the first level do not match $-topics).
 pub fn topic_matches(filter: &str, topic: &str) -> bool {
@@ -139,16 +170,7 @@ pub fn parse(text: &str) -> Result<Address, String> {
         out.topic = sparkplug::node_filter(&out.spb_group, &out.spb_node);
     }
 
-    // '#' only as the last level, '+' only as a whole level
-    let tb = topic.as_bytes();
-    for (i, &c) in tb.iter().enumerate() {
-        if c == b'#' && (i + 1 != tb.len() || (i > 0 && tb[i - 1] != b'/')) {
-            return Err("'#' must be the last level of a topic filter".into());
-        }
-        if c == b'+' && ((i > 0 && tb[i - 1] != b'/') || (i + 1 < tb.len() && tb[i + 1] != b'/')) {
-            return Err("'+' must occupy a whole topic level".into());
-        }
-    }
+    check_filter(topic)?;
 
     for opt in parts {
         let opt = trim(opt);
@@ -228,6 +250,16 @@ pub fn parse(text: &str) -> Result<Address, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filters() {
+        for f in ["a", "a/b", "#", "a/#", "+", "a/+/c", "+/+", "$share/g/a/#", "$SYS/#", "/"] {
+            assert!(check_filter(f).is_ok(), "{f}");
+        }
+        for f in ["", "a/#/b", "a#", "a/b#", "a+", "a/+b", "$share/g", "$share/g/", "$share//a", "$share/g+/a", "a\0b"] {
+            assert!(check_filter(f).is_err(), "{f:?}");
+        }
+    }
 
     fn ok(t: &str) -> Address {
         parse(t).unwrap_or_else(|e| panic!("{t}: {e}"))

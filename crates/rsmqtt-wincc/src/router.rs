@@ -10,6 +10,11 @@
 //! driver turns the values into HWObjects; the router never calls the
 //! driver.
 //!
+//! Subscriptions of the driver's MSA service (RsMqttService, by id) share
+//! the filters with the addresses ([`Router::add_service`] /
+//! [`Router::remove_service`]); a message lists the ids whose filter
+//! matches it in [`Outcome::service`].
+//!
 //! A message costs no allocations once the buffers have grown: the caller
 //! keeps one `Outcome` and passes it to every call, the values go into one
 //! byte buffer in it, and the addresses are C strings made once when they
@@ -74,6 +79,11 @@ pub struct Outcome {
     pub warnings: Vec<Warning>,
     /// the values of the deliveries
     pub data: Vec<u8>,
+    /// the service subscriptions (ids) whose filter matches the message;
+    /// empty for a copy of the previous message (see [`Copies`])
+    pub service: Vec<u64>,
+    /// the payload is UTF-8 text without NUL bytes (set when `service` is not empty)
+    pub service_text: bool,
 }
 
 impl Outcome {
@@ -83,6 +93,8 @@ impl Outcome {
         self.subscribe.clear();
         self.warnings.clear();
         self.data.clear();
+        self.service.clear();
+        self.service_text = false;
     }
 
     /// The value of a delivery (None: the payload of the message).
@@ -167,6 +179,8 @@ struct Subscription {
     sparkplug_refs: i32,
     /// full address -> reference count
     addresses: BTreeMap<String, i32>,
+    /// service subscriptions (ids) on this filter
+    service: Vec<u64>,
     /// built from `addresses` when they change, so that a message needs no
     /// address lookups and one pass over its JSON for all json= / ts= paths
     plan: Vec<Plan>,
@@ -183,6 +197,44 @@ fn spb_key(a: &Address) -> SpbKey {
     (a.spb_group.clone(), a.spb_node.clone(), a.spb_device.clone(), metric)
 }
 
+impl Subscription {
+    /// neither an address nor a service subscription uses the filter
+    fn unused(&self) -> bool {
+        self.addresses.is_empty() && self.service.is_empty()
+    }
+}
+
+/// Overlapping filters (a/# and a/b) make brokers like mosquitto send a
+/// message once per filter, back to back. The service subscriptions get it
+/// once: identical messages that directly follow are skipped, up to the
+/// number of further filters that matched. `$share/` filters are not
+/// counted (they may or may not get a copy: a duplicate is better than a
+/// lost message). Addresses get every copy.
+#[derive(Default)]
+struct Copies {
+    topic: String,
+    payload: Vec<u8>,
+    left: usize,
+}
+
+impl Copies {
+    /// A message that matched `filters` filters: true if it is a copy.
+    fn check(&mut self, topic: &str, payload: &[u8], filters: usize, for_service: bool) -> bool {
+        if self.left > 0 && self.topic == topic && self.payload == payload {
+            self.left -= 1;
+            return true;
+        }
+        self.left = if for_service { filters.saturating_sub(1) } else { 0 };
+        if self.left > 0 {
+            self.topic.clear();
+            self.topic.push_str(topic);
+            self.payload.clear();
+            self.payload.extend_from_slice(payload);
+        }
+        false
+    }
+}
+
 #[derive(Default)]
 pub struct Router {
     addresses: BTreeMap<String, Entry>,
@@ -197,6 +249,9 @@ pub struct Router {
     spb_last: HashMap<String, Vec<u8>>,
     /// addresses whose last JSON payload did not fit (warned once)
     json_warned: HashSet<String>,
+    /// service subscription id -> filter
+    service: HashMap<u64, String>,
+    copies: Copies,
 }
 
 impl Router {
@@ -298,12 +353,46 @@ impl Router {
             }
         }
         sub.plan_dirty = true;
-        if !sub.addresses.is_empty() {
+        self.release(addr.topic)
+    }
+
+    /// Drops a subscription nothing uses any more; returns its filter to unsubscribe.
+    fn release(&mut self, filter: String) -> Option<String> {
+        if !self.subs.get(&filter)?.unused() {
             return None;
         }
-        self.matching.remove(&addr.topic);
-        self.subs.remove(&addr.topic);
-        Some(addr.topic)
+        self.matching.remove(&filter);
+        self.subs.remove(&filter);
+        Some(filter)
+    }
+
+    /// Registers a subscription of the MSA service; returns the filter to
+    /// subscribe (again: new, or with a higher QoS).
+    pub fn add_service(&mut self, id: u64, filter: &str, qos: i32) -> Result<Option<String>, String> {
+        address::check_filter(filter)?;
+        let is_new = !self.subs.contains_key(filter);
+        let sub = self.subs.entry(filter.to_string()).or_default();
+        let changed = is_new || qos > sub.qos;
+        if changed {
+            sub.qos = qos;
+        }
+        if is_new {
+            sub.matching = address::is_wildcard_filter(filter);
+            if sub.matching {
+                self.matching.insert(filter.to_string());
+            }
+        }
+        sub.service.push(id);
+        self.service.insert(id, filter.to_string());
+        Ok(changed.then(|| filter.to_string()))
+    }
+
+    /// Unregisters a subscription of the MSA service; returns the filter to
+    /// unsubscribe when nothing else uses it.
+    pub fn remove_service(&mut self, id: u64) -> Option<String> {
+        let filter = self.service.remove(&id)?;
+        self.subs.get_mut(&filter)?.service.retain(|&s| s != id);
+        self.release(filter)
     }
 
     /// A subscription by its filter.
@@ -351,10 +440,15 @@ impl Router {
             }
         }
 
-        let Router { addresses, subs, matching, spb, spb_index, spb_last, json_warned, .. } = self;
+        let Router { addresses, subs, matching, spb, spb_index, spb_last, json_warned, copies, .. } = self;
+
+        // filters that may get a copy of the message (see Copies)
+        let mut filters = 0;
 
         // exact subscriptions
         if let Some(sub) = subs.get_mut(topic).filter(|s| !s.matching) {
+            filters += 1;
+            out.service.extend_from_slice(&sub.service);
             deliver_to(sub, addresses, json_warned, payload, out);
         }
 
@@ -365,6 +459,10 @@ impl Router {
                 continue;
             }
             let Some(sub) = subs.get_mut(f) else { continue };
+            if !f.starts_with("$share/") {
+                filters += 1;
+            }
+            out.service.extend_from_slice(&sub.service);
             if !sparkplug_done && sub.sparkplug_refs > 0 {
                 sparkplug_done = true; // once per message
                 let o = spb.on_message(topic, payload, now_ms);
@@ -375,6 +473,13 @@ impl Router {
             }
             // other addresses on the filter (the plan skips Sparkplug ones)
             deliver_to(sub, addresses, json_warned, payload, out);
+        }
+
+        // the service subscriptions get one copy of each message
+        if copies.check(topic, payload, filters, !out.service.is_empty()) {
+            out.service.clear();
+        } else if !out.service.is_empty() {
+            out.service_text = !payload.contains(&0) && std::str::from_utf8(payload).is_ok();
         }
     }
 
@@ -658,6 +763,51 @@ mod tests {
 
     fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
         v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+    }
+
+    #[test]
+    fn service_subscriptions() {
+        let mut r = Router::new();
+        assert!(r.add_service(1, "a/#/b", 1).is_err());
+        assert_eq!(r.add_service(1, "a/#", 1).unwrap(), Some("a/#".into()));
+        assert_eq!(r.add_service(2, "a/#", 0).unwrap(), None);
+        // shared with an address: removing one keeps the filter
+        assert_eq!(r.add("p:a/b", false, true, 1).unwrap(), Added::Subscribe("a/b".into()));
+        assert_eq!(r.add_service(3, "a/b", 2).unwrap(), Some("a/b".into()));
+        assert_eq!(r.remove("p:a/b", true), None);
+        assert_eq!(r.filter("a/b").unwrap().qos, 2);
+
+        let mut out = Outcome::default();
+        let ids = |r: &mut Router, topic: &str, payload: &[u8], out: &mut Outcome| {
+            r.message_into(topic, payload, 0, "", 0, out);
+            let mut v = out.service.clone();
+            v.sort();
+            v
+        };
+        // a/b matches a/# and a/b: the broker sends it twice, the service gets it once
+        assert_eq!(ids(&mut r, "a/b", b"x", &mut out), vec![1, 2, 3]);
+        assert!(out.service_text);
+        assert_eq!(ids(&mut r, "a/b", b"x", &mut out), Vec::<u64>::new());
+        // the same payload published again is a new message (and its copy)
+        assert_eq!(ids(&mut r, "a/b", b"x", &mut out), vec![1, 2, 3]);
+        assert_eq!(ids(&mut r, "a/b", b"x", &mut out), Vec::<u64>::new());
+        // one filter: no copies; NUL / not UTF-8 is no text
+        assert_eq!(ids(&mut r, "a/c", b"x\0y", &mut out), vec![1, 2]);
+        assert!(!out.service_text);
+        assert_eq!(ids(&mut r, "a/c", b"x\0y", &mut out), vec![1, 2]);
+        assert_eq!(ids(&mut r, "a/c", &[0xff], &mut out), vec![1, 2]);
+        assert!(!out.service_text);
+        // another message ends the copies of the previous one
+        assert_eq!(ids(&mut r, "a/b", b"y", &mut out), vec![1, 2, 3]);
+        assert_eq!(ids(&mut r, "a/c", b"z", &mut out), vec![1, 2]);
+        assert_eq!(ids(&mut r, "a/b", b"y", &mut out), vec![1, 2, 3]);
+        assert_eq!(ids(&mut r, "b", b"y", &mut out), Vec::<u64>::new());
+
+        assert_eq!(r.remove_service(1), None);
+        assert_eq!(r.remove_service(2), Some("a/#".into()));
+        assert_eq!(r.remove_service(3), Some("a/b".into()));
+        assert_eq!(r.remove_service(3), None);
+        assert!(!r.has_addresses());
     }
 
     #[test]

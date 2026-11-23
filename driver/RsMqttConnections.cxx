@@ -2,6 +2,7 @@
 #include "RsMqttBrokerDp.hxx"
 #include "RsMqttRedu.hxx"
 #include "RsMqttSecret.hxx"
+#include "RsMqttTime.hxx"
 
 #include <ErrHdl.hxx>
 #include <PVSSMacros.hxx>
@@ -17,11 +18,6 @@ static void logError(ErrClass::ErrPrio prio, const char *func, const std::string
                 "RsMqttConnections", func, CharString(text.c_str()));
 }
 
-static int64_t nowMs()
-{
-  return std::chrono::duration_cast<std::chrono::milliseconds>(
-           std::chrono::system_clock::now().time_since_epoch()).count();
-}
 
 RsMqttConnection::RsMqttConnection(const std::string &n)
   : name(n), settings(n, (int) Resources::getManNum()) {}
@@ -29,7 +25,7 @@ RsMqttConnection::RsMqttConnection(const std::string &n)
 rsmqtt::Options RsMqttConnection::clientOptions()
 {
   std::vector<std::string> warnings;
-  rsmqtt::Options o = settings.clientOptions(RsMqttRedu::isHost2(), (const char *) Resources::getDataDir(), nowMs(),
+  rsmqtt::Options o = settings.clientOptions(RsMqttRedu::isHost2(), (const char *) Resources::getDataDir(), rsmqttNowMs(),
                                              warnings);
   for (const auto &w : warnings)
     logError(ErrClass::PRIO_WARNING, "clientOptions", "[" + name + "] " + w);
@@ -101,6 +97,26 @@ void RsMqttConnection::subscribe(const std::vector<std::string> &filters)
 void RsMqttConnection::subscribeAll()
 {
   subscribe(router.filters());
+}
+
+bool RsMqttConnection::publish(const std::string &topic, std::string_view payload, int qos, bool retain, std::string &err)
+{
+  if ( !client )
+  {
+    err = "no active client";
+    return false;
+  }
+  try
+  {
+    client->publish(topic, payload, qos, retain);
+    messagesOut++;
+    return true;
+  }
+  catch (const rsmqtt::Error &e)
+  {
+    err = e.what();
+    return false;
+  }
 }
 
 void RsMqttConnection::unsubscribe(const std::string &filter)

@@ -60,6 +60,7 @@ set(SOURCES
   RsMqttMain.cxx
   RsMqttResources.cxx
   RsMqttSecret.cxx
+  RsMqttService.cxx
   RsMqttTrans.cxx
 )
 
