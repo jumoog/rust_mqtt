@@ -1,0 +1,14 @@
+; Import library for the libcrypto-3-x64.dll in <WinCC OA>/bin: the OpenSSL
+; functions used by DrvSecurity (libComDrv), which decrypts passwords that
+; were encrypted with _DriverSecurity.PublicKey.
+LIBRARY libcrypto-3-x64
+EXPORTS
+BIO_free
+BIO_new_mem_buf
+PEM_read_RSAPrivateKey
+PEM_read_bio_RSAPublicKey
+PEM_read_bio_RSA_PUBKEY
+RSA_free
+RSA_private_decrypt
+RSA_public_encrypt
+RSA_size

@@ -1,0 +1,1709 @@
+V 14
+3
+LANG:10000 14 rsmqtt_brokers
+LANG:10001 14 rsmqtt_brokers
+LANG:10027 14 rsmqtt_brokers
+PANEL,-1 -1 700 806 N "_3DFace" 1
+"$broker"
+"#uses \"rsmqtt\"
+
+main()
+{
+  string broker;
+  if ( isDollarDefined(\"$broker\") )
+    broker = getDollarValue(\"$broker\");
+  rsmqttPanelInit(broker);
+}" 0
+ E E E E 1 -1 -1 0  0 0
+""0  1
+E E 4
+"CBRef" "0"
+"EClose" E
+"dpi" "96"
+"pdpi" "96"
+0 0 0
+""
+NC
+DISPLAY_LAYER, 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0
+LAYER, 0 
+1
+LANG:10000 6 Layer1
+2 101
+"lblTitle"
+""
+1 20 12 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+101 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 12 420 26
+0 0 0 "0s" 0 0 0 192 0 0  20 12 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 20 MQTT-Broker (rsmqtt)
+LANG:10001 20 MQTT-Broker (rsmqtt)
+LANG:10027 20 MQTT-Broker (rsmqtt)
+2 102
+"lblBrokerName"
+""
+1 20 44 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+102 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 44 220 58
+0 0 0 "0s" 0 0 0 192 0 0  20 44 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 13 Broker (Name)
+LANG:10001 13 Broker (name)
+LANG:10027 13 Broker (name)
+22 103
+"cmbBroker"
+""
+1 16 62 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+103 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 62 260 88
+0
+
+"main()
+{
+  this.editable = TRUE;
+}" 0
+
+"#uses \"rsmqtt\"
+
+main()
+{
+  // an existing broker was picked (typing a new name keeps the form)
+  if ( dynContains(this.items, this.text) > 0 )
+    rsmqttPanelShow(this.text);
+  else
+    rsmqttPanelUpdateState();
+}" 0
+
+E
+ 0 0
+13 104
+"cmdNew"
+""
+1 277 73 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
+ E E
+104 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  270 61 350 89
+
+T 
+3
+LANG:10000 3 Neu
+LANG:10001 3 New
+LANG:10027 3 New
+"#uses \"rsmqtt\"
+
+main()
+{
+  rsmqttPanelClear();
+  setInputFocus(myModuleName(), myPanelName(), \"cmbBroker\");
+}" 0
+ E E E
+13 105
+"cmdDelete"
+""
+1 363 73 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
+ E E
+105 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  356 61 436 89
+
+T 
+3
+LANG:10000 8 Löschen
+LANG:10001 6 Delete
+LANG:10027 6 Delete
+"#uses \"rsmqtt\"
+
+main()
+{
+  rsmqttPanelDelete();
+}" 0
+ E E E
+13 106
+"cmdReconnect"
+""
+1 449 73 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
+ E E
+106 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  442 61 572 89
+
+T 
+3
+LANG:10000 13 Neu verbinden
+LANG:10001 9 Reconnect
+LANG:10027 9 Reconnect
+"#uses \"rsmqtt\"
+
+main()
+{
+  rsmqttPanelReconnect();
+}" 0
+ E E E
+2 107
+"lblStateCap"
+""
+1 20 102 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+107 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 102 90 116
+0 0 0 "0s" 0 0 0 192 0 0  20 102 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 8 Zustand:
+LANG:10001 6 State:
+LANG:10027 6 State:
+2 108
+"lblState"
+""
+1 92 102 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+108 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 92 102 682 116
+0 0 0 "0s" 0 0 0 192 0 0  92 102 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+2 109
+"lblError"
+""
+1 92 120 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+109 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 92 120 682 134
+0 0 0 "0s" 0 0 0 192 0 0  92 120 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+2 110
+"lblInfo"
+""
+1 92 138 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+110 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 92 138 682 152
+0 0 0 "0s" 0 0 0 192 0 0  92 138 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+2 111
+"lblSecConn"
+""
+1 20 172 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+111 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 172 320 186
+0 0 0 "0s" 0 0 0 192 0 0  20 172 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 10 Verbindung
+LANG:10001 10 Connection
+LANG:10027 10 Connection
+2 112
+"lblUri"
+""
+1 20 194 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+112 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 194 220 208
+0 0 0 "0s" 0 0 0 192 0 0  20 194 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 10 Server-URI
+LANG:10001 10 Server URI
+LANG:10027 10 Server URI
+2 113
+"lblDrv"
+""
+1 482 194 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+113 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 482 194 582 208
+0 0 0 "0s" 0 0 0 192 0 0  482 194 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 13 Treibernummer
+LANG:10001 13 Driver number
+LANG:10027 13 Driver number
+14 114
+"txtUri"
+""
+1 16 212 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+114 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 212 470 238
+3 "1000s" 1000 0 0 0 0 -1  E E E
+21 115
+"spinDriver"
+""
+1 478 212 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+115 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  480 212 560 238
+0
+
+E
+"main()
+{
+}" 0
+
+E
+
+N 1 255 1 1 1 1
+20 116
+"chkActive"
+""
+1 578 214 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+116 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  576 212 690 238
+1
+T 
+3
+LANG:10000 5 Aktiv
+LANG:10001 6 Active
+LANG:10027 6 Active
+
+0 
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+E E
+0 0 0 0 0
+1
+E E
+E"main(int button, bool state)
+{
+}" 0
+2 117
+"lblUris"
+""
+1 20 248 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+117 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 248 420 262
+0 0 0 "0s" 0 0 0 192 0 0  20 248 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 58 Weitere Server-URIs (Failover, durch Leerzeichen getrennt)
+LANG:10001 49 More server URIs (fail-over, separated by spaces)
+LANG:10027 49 More server URIs (fail-over, separated by spaces)
+14 118
+"txtUris"
+""
+1 16 266 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+118 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 266 690 292
+3 "1000s" 1000 0 0 0 0 -1  E E E
+2 119
+"lblClientId"
+""
+1 20 302 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+119 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 302 220 316
+0 0 0 "0s" 0 0 0 192 0 0  20 302 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 30 Client-ID (leer = automatisch)
+LANG:10001 29 Client ID (empty = automatic)
+LANG:10027 29 Client ID (empty = automatic)
+2 120
+"lblVersion"
+""
+1 300 302 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+120 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 300 302 420 316
+0 0 0 "0s" 0 0 0 192 0 0  300 302 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 12 MQTT-Version
+LANG:10001 12 MQTT version
+LANG:10027 12 MQTT version
+2 121
+"lblKeepAlive"
+""
+1 440 302 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+121 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 440 302 560 316
+0 0 0 "0s" 0 0 0 192 0 0  440 302 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 14 Keep alive [s]
+LANG:10001 14 Keep alive [s]
+LANG:10027 14 Keep alive [s]
+14 122
+"txtClientId"
+""
+1 16 320 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+122 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 320 290 346
+3 "255s" 255 0 0 0 0 -1  E E E
+22 123
+"cmbVersion"
+""
+1 296 320 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+123 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  298 320 430 346
+4
+3
+LANG:10000 12 Standard (5)
+LANG:10001 11 Default (5)
+LANG:10027 11 Default (5)
+
+1
+3
+LANG:10000 3 3.1
+LANG:10001 3 3.1
+LANG:10027 3 3.1
+
+0
+3
+LANG:10000 5 3.1.1
+LANG:10001 5 3.1.1
+LANG:10027 5 3.1.1
+
+0
+3
+LANG:10000 1 5
+LANG:10001 1 5
+LANG:10027 1 5
+
+0
+
+E
+E
+E
+ 0 0
+14 124
+"txtKeepAlive"
+""
+1 436 320 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+124 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  438 320 520 346
+3 "10s" 10 0 0 0 0 -1  E E E
+20 125
+"chkClean"
+""
+1 538 322 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+125 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  536 320 690 346
+1
+T 
+3
+LANG:10000 13 Clean Session
+LANG:10001 13 Clean session
+LANG:10027 13 Clean session
+
+0 
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+E E
+0 0 0 0 0
+1
+E E
+E"main(int button, bool state)
+{
+}" 0
+2 126
+"lblUser"
+""
+1 20 356 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+126 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 356 220 370
+0 0 0 "0s" 0 0 0 192 0 0  20 356 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 8 Benutzer
+LANG:10001 9 User name
+LANG:10027 9 User name
+2 127
+"lblPassword"
+""
+1 300 356 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+127 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 300 356 500 370
+0 0 0 "0s" 0 0 0 192 0 0  300 356 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 8 Passwort
+LANG:10001 8 Password
+LANG:10027 8 Password
+14 128
+"txtUser"
+""
+1 16 374 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+128 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 374 290 400
+3 "255s" 255 0 0 0 0 -1  E E E
+14 129
+"txtPassword"
+""
+1 296 374 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+129 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  298 374 520 400
+3 "255S" 255 0 0 0 0 -1  E E E
+2 130
+"lblSecTls"
+""
+1 20 416 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+130 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 416 420 430
+0 0 0 "0s" 0 0 0 192 0 0  20 416 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 35 TLS (für mqtts://, ssl://, wss://)
+LANG:10001 34 TLS (for mqtts://, ssl://, wss://)
+LANG:10027 34 TLS (for mqtts://, ssl://, wss://)
+2 131
+"lblTrust"
+""
+1 20 438 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+131 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 438 220 452
+0 0 0 "0s" 0 0 0 192 0 0  20 438 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 20 CA-Zertifikate (PEM)
+LANG:10001 21 CA certificates (PEM)
+LANG:10027 21 CA certificates (PEM)
+2 132
+"lblKeyStore"
+""
+1 240 438 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+132 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 240 438 440 452
+0 0 0 "0s" 0 0 0 192 0 0  240 438 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 23 Client-Zertifikat (PEM)
+LANG:10001 24 Client certificate (PEM)
+LANG:10027 24 Client certificate (PEM)
+2 133
+"lblKey"
+""
+1 460 438 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+133 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 460 438 660 452
+0 0 0 "0s" 0 0 0 192 0 0  460 438 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 25 Privater Schlüssel (PEM)
+LANG:10001 17 Private key (PEM)
+LANG:10027 17 Private key (PEM)
+14 134
+"txtTrust"
+""
+1 16 456 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+134 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 456 230 482
+3 "1000s" 1000 0 0 0 0 -1  E E E
+14 135
+"txtKeyStore"
+""
+1 236 456 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+135 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  238 456 450 482
+3 "1000s" 1000 0 0 0 0 -1  E E E
+14 136
+"txtKey"
+""
+1 456 456 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+136 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  458 456 690 482
+3 "1000s" 1000 0 0 0 0 -1  E E E
+20 137
+"chkVerify"
+""
+1 20 490 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+137 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 488 400 512
+1
+T 
+3
+LANG:10000 30 Hostname im Zertifikat prüfen
+LANG:10001 39 Verify the host name in the certificate
+LANG:10027 39 Verify the host name in the certificate
+
+0 
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+E E
+0 0 0 0 0
+1
+E E
+E"main(int button, bool state)
+{
+}" 0
+2 138
+"lblSecWill"
+""
+1 20 524 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+138 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 524 420 538
+0 0 0 "0s" 0 0 0 192 0 0  20 524 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 25 Letzter Wille (Last Will)
+LANG:10001 9 Last will
+LANG:10027 9 Last will
+2 139
+"lblWillTopic"
+""
+1 20 546 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+139 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 546 220 560
+0 0 0 "0s" 0 0 0 192 0 0  20 546 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 5 Topic
+LANG:10001 5 Topic
+LANG:10027 5 Topic
+2 140
+"lblWillPayload"
+""
+1 300 546 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+140 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 300 546 500 560
+0 0 0 "0s" 0 0 0 192 0 0  300 546 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 7 Payload
+LANG:10001 7 Payload
+LANG:10027 7 Payload
+2 141
+"lblWillQos"
+""
+1 520 546 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+141 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 520 546 580 560
+0 0 0 "0s" 0 0 0 192 0 0  520 546 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 3 QoS
+LANG:10001 3 QoS
+LANG:10027 3 QoS
+14 142
+"txtWillTopic"
+""
+1 16 564 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+142 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 564 290 590
+3 "1000s" 1000 0 0 0 0 -1  E E E
+14 143
+"txtWillPayload"
+""
+1 296 564 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+143 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  298 564 510 590
+3 "1000s" 1000 0 0 0 0 -1  E E E
+22 144
+"cmbWillQos"
+""
+1 516 564 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+144 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  518 564 580 590
+3
+3
+LANG:10000 1 0
+LANG:10001 1 0
+LANG:10027 1 0
+
+1
+3
+LANG:10000 1 1
+LANG:10001 1 1
+LANG:10027 1 1
+
+0
+3
+LANG:10000 1 2
+LANG:10001 1 2
+LANG:10027 1 2
+
+0
+
+E
+E
+E
+ 0 0
+20 145
+"chkWillRetain"
+""
+1 592 566 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+145 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  590 564 690 590
+1
+T 
+3
+LANG:10000 6 Retain
+LANG:10001 6 Retain
+LANG:10027 6 Retain
+
+0 
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+E E
+0 0 0 0 0
+1
+E E
+E"main(int button, bool state)
+{
+}" 0
+2 146
+"lblSecDefaults"
+""
+1 20 604 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+146 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 604 420 618
+0 0 0 "0s" 0 0 0 192 0 0  20 604 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 22 Vorgaben für Adressen
+LANG:10001 22 Defaults for addresses
+LANG:10027 22 Defaults for addresses
+2 147
+"lblSubQos"
+""
+1 20 626 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+147 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 626 150 640
+0 0 0 "0s" 0 0 0 192 0 0  20 626 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 13 Subscribe-QoS
+LANG:10001 13 Subscribe QoS
+LANG:10027 13 Subscribe QoS
+2 148
+"lblPubQos"
+""
+1 160 626 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+148 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 160 626 290 640
+0 0 0 "0s" 0 0 0 192 0 0  160 626 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 11 Publish-QoS
+LANG:10001 11 Publish QoS
+LANG:10027 11 Publish QoS
+22 149
+"cmbSubQos"
+""
+1 16 644 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+149 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 644 150 670
+3
+3
+LANG:10000 1 0
+LANG:10001 1 0
+LANG:10027 1 0
+
+1
+3
+LANG:10000 1 1
+LANG:10001 1 1
+LANG:10027 1 1
+
+0
+3
+LANG:10000 1 2
+LANG:10001 1 2
+LANG:10027 1 2
+
+0
+
+E
+E
+E
+ 0 0
+22 150
+"cmbPubQos"
+""
+1 156 644 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+150 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  158 644 290 670
+3
+3
+LANG:10000 1 0
+LANG:10001 1 0
+LANG:10027 1 0
+
+1
+3
+LANG:10000 1 1
+LANG:10001 1 1
+LANG:10027 1 1
+
+0
+3
+LANG:10000 1 2
+LANG:10001 1 2
+LANG:10027 1 2
+
+0
+
+E
+E
+E
+ 0 0
+20 151
+"chkPubRetain"
+""
+1 302 646 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+151 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  300 644 500 670
+1
+T 
+3
+LANG:10000 18 Publish mit Retain
+LANG:10001 16 Publish retained
+LANG:10027 16 Publish retained
+
+0 
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+E E
+0 0 0 0 0
+1
+E E
+E"main(int button, bool state)
+{
+}" 0
+2 152
+"lblOptions"
+""
+1 20 680 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+152 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 680 680 694
+0 0 0 "0s" 0 0 0 192 0 0  20 680 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 88 Weitere rsmqtt-Optionen (name=wert; ...), z.B. sessionExpiryInterval=3600; ssl.alpn=mqtt
+LANG:10001 85 More rsmqtt options (name=value; ...), e.g. sessionExpiryInterval=3600; ssl.alpn=mqtt
+LANG:10027 85 More rsmqtt options (name=value; ...), e.g. sessionExpiryInterval=3600; ssl.alpn=mqtt
+14 153
+"txtOptions"
+""
+1 16 698 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+153 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 698 690 724
+3 "1000s" 1000 0 0 0 0 -1  E E E
+2 154
+"lblMessage"
+""
+1 20 736 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+154 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 736 680 750
+0 0 0 "0s" 0 0 0 192 0 0  20 736 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+13 155
+"cmdSave"
+""
+1 477 774 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
+ E E
+155 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  470 762 580 792
+
+T 
+3
+LANG:10000 9 Speichern
+LANG:10001 4 Save
+LANG:10027 4 Save
+"#uses \"rsmqtt\"
+
+main()
+{
+  rsmqttPanelSave();
+}" 0
+ E E E
+13 156
+"cmdClose"
+""
+1 593 774 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
+ E E
+156 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  586 762 690 792
+
+T 
+3
+LANG:10000 10 Schließen
+LANG:10001 5 Close
+LANG:10027 5 Close
+"main()
+{
+  string broker;
+  getValue(\"cmbBroker\", \"text\", broker);
+  PanelOffReturn(makeDynFloat(1), makeDynString(broker));
+}" 0
+ E E E
+0
+LAYER, 1 
+1
+LANG:10000 6 Layer2
+0
+LAYER, 2 
+1
+LANG:10000 6 Layer3
+0
+LAYER, 3 
+1
+LANG:10000 6 Layer4
+0
+LAYER, 4 
+1
+LANG:10000 6 Layer5
+0
+LAYER, 5 
+1
+LANG:10000 6 Layer6
+0
+LAYER, 6 
+1
+LANG:10000 6 Layer7
+0
+LAYER, 7 
+1
+LANG:10000 6 Layer8
+0
+0

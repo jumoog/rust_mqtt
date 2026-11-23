@@ -1,0 +1,875 @@
+V 14
+3
+LANG:10000 14 address_rsmqtt
+LANG:10001 14 address_rsmqtt
+LANG:10027 14 address_rsmqtt
+PANEL,-1 -1 620 480 N "_3DFace" 1
+"$1"
+"main()
+{
+  string dp;
+
+  if ($1==\"\")
+  {
+    RootPanelOn(
+      \"vision/MessageWarning\",
+      paGetCatStr(\"para\",\"warning\"),
+      makeDynString(paGetCatStr(\"para\",\"novision\")));
+  }
+  if (!paIsNative[paMyModuleId()])
+  {
+    dp = myUiDpName() + \".\";
+    dpSetWait(dp+\"PanelOff.ModuleName:_original.._value\",myModuleName(),
+          dp+\"PanelOff.PanelName:_original.._value\",\"address\");
+  }
+  paInitPanel($1,\":_address\");
+}
+
+" 0
+ "main()
+{
+  //IM 106997
+  if(mappingHasKey(gMpLastDpLocked,myModuleName()) && (dpSubStr(gMpLastDpLocked[myModuleName()],DPSUB_SYS_DP_EL) == $1) && dpExists(dpSubStr($1,DPSUB_DP_EL)))
+    dpSet($1+\":_lock._address._locked\",FALSE);
+  if(mappingHasKey(gMpLastDpLocked,myModuleName()))
+  {
+    gMpLastDpLocked[myModuleName()] = \"\";
+    mappingRemove(gMpLastDpLocked,myModuleName());
+  }
+}" 0
+ E E E 1 -1 -1 0  0 0
+""0  1
+E E 4
+"CBRef" "0"
+"EClose" E
+"dpi" "96"
+"pdpi" "96"
+0 0 0
+""
+NC
+DISPLAY_LAYER, 1 0 1 0 1 0 1 0 1 0 1 0 1 0 1 0
+LAYER, 0 
+1
+LANG:10000 6 Layer1
+2 14
+"programname"
+""
+1 28 10 E E E 1 E 1 E N "_3DText" E N "_Transparent" E E
+ E E
+14 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  0 E 30 10 260 29
+0 2 0 "0s" 0 0 0 192 0 0  30 10 1
+3
+LANG:10000 39 arial,-1,18,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 arial,-1,18,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 arial,-1,18,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 26 Peripherie - MQTT (rsmqtt)
+LANG:10001 25 Periphery - MQTT (rsmqtt)
+LANG:10027 25 Periphery - MQTT (rsmqtt)
+1 66 0 "" 0
+0
+1 68 1 "" 0
+0
+2 101
+"lblBroker"
+""
+1 20 45 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+101 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 45 80 59
+0 0 0 "0s" 0 0 0 192 0 0  20 45 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 6 Broker
+LANG:10001 6 Broker
+LANG:10027 6 Broker
+2 102
+"lblTopic"
+""
+1 230 45 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+102 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 230 45 290 59
+0 0 0 "0s" 0 0 0 192 0 0  230 45 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 5 Topic
+LANG:10001 5 Topic
+LANG:10027 5 Topic
+2 103
+"Text6"
+""
+1 500 45 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+103 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 500 45 600 59
+0 0 0 "0s" 0 0 0 192 0 0  500 45 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 13 Treibernummer
+LANG:10001 13 Driver number
+LANG:10027 20 № драйвера
+2 104
+"lblDatatype"
+""
+1 20 110 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+104 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 110 140 124
+0 0 0 "0s" 0 0 0 192 0 0  20 110 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 8 Datentyp
+LANG:10001 9 Data type
+LANG:10027 19 Тип данных
+2 105
+"lblQos"
+""
+1 230 110 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+105 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 230 110 270 124
+0 0 0 "0s" 0 0 0 192 0 0  230 110 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 3 QoS
+LANG:10001 3 QoS
+LANG:10027 3 QoS
+2 106
+"lblRetain"
+""
+1 330 110 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+106 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 330 110 390 124
+0 0 0 "0s" 0 0 0 192 0 0  330 110 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 6 Retain
+LANG:10001 6 Retain
+LANG:10027 6 Retain
+2 107
+"lblDirection"
+""
+1 20 180 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+107 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 180 140 194
+0 0 0 "0s" 0 0 0 192 0 0  20 180 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 8 Richtung
+LANG:10001 9 Direction
+LANG:10027 10 Режим
+2 108
+"lblOptions"
+""
+1 230 180 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+108 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 230 180 390 194
+0 0 0 "0s" 0 0 0 192 0 0  230 180 1
+3
+LANG:10000 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 16 Weitere Optionen
+LANG:10001 12 More options
+LANG:10027 12 More options
+2 109
+"lblHint1"
+""
+1 20 270 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+109 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 270 600 284
+0 0 0 "0s" 0 0 0 192 0 0  20 270 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 85 Eingang: Topic darf + und # enthalten, $share/<Gruppe>/... für Shared Subscriptions.
+LANG:10001 82 Input: the topic may contain + and #, $share/<group>/... for shared subscriptions.
+LANG:10027 82 Input: the topic may contain + and #, $share/<group>/... for shared subscriptions.
+2 110
+"lblHint2"
+""
+1 20 288 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+110 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 288 600 302
+0 0 0 "0s" 0 0 0 192 0 0  20 288 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 74 Topic $state = Verbindungszustand (1/0).  Optionen: nolocal; rap; rh=0|1|2
+LANG:10001 71 Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2
+LANG:10027 71 Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2
+2 111
+"lblBrokerState"
+""
+1 20 320 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+111 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 320 600 334
+0 0 0 "0s" 0 0 0 192 0 0  20 320 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+14 112
+"txtTopic"
+""
+1 226 63 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+112 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  228 63 492 89
+3 "1000s" 1000 0 0 0 0 -1  E E E
+14 113
+"txtOptions"
+""
+1 226 198 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+113 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  228 198 492 224
+3 "255s" 255 0 0 0 0 -1  E E E
+22 114
+"trans_art"
+""
+1 16 128 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+114 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 128 222 154
+8
+3
+LANG:10000 13 Text (String)
+LANG:10001 13 Text (string)
+LANG:10027 13 Text (string)
+
+1
+3
+LANG:10000 15 Ganzzahl 32 Bit
+LANG:10001 14 Integer 32 bit
+LANG:10027 14 Integer 32 bit
+
+0
+3
+LANG:10000 29 Ganzzahl 32 Bit vorzeichenlos
+LANG:10001 23 Unsigned integer 32 bit
+LANG:10027 23 Unsigned integer 32 bit
+
+0
+3
+LANG:10000 15 Ganzzahl 64 Bit
+LANG:10001 14 Integer 64 bit
+LANG:10027 14 Integer 64 bit
+
+0
+3
+LANG:10000 29 Ganzzahl 64 Bit vorzeichenlos
+LANG:10001 23 Unsigned integer 64 bit
+LANG:10027 23 Unsigned integer 64 bit
+
+0
+3
+LANG:10000 19 Gleitkomma (double)
+LANG:10001 14 Float (double)
+LANG:10027 14 Float (double)
+
+0
+3
+LANG:10000 4 Bool
+LANG:10001 7 Boolean
+LANG:10027 7 Boolean
+
+0
+3
+LANG:10000 15 Blob (Rohdaten)
+LANG:10001 16 Blob (raw bytes)
+LANG:10027 16 Blob (raw bytes)
+
+0
+
+E
+E
+E
+ 0 0
+20 12
+"lowlevel"
+""
+1 438 128 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+90 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  438 128 581 156
+1
+T 
+3
+LANG:10000 17 Alt/Neu-Vergleich
+LANG:10001 18 Old/new comparison
+LANG:10027 29 Сравн. стар./нов.
+
+0 
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+E E
+0 0 0 0 0
+1
+E E
+EE1 70 2 "0" 0
+0
+21 35
+"Treiber"
+""
+1 496.6071428571428 63 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+91 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  498 63 597 89
+0
+
+E
+"#uses \"driverSettings\"
+
+main()
+{
+  drvsCheckRunningDrvType(\"RSMQTT\", this, $1);
+}" 0
+
+E
+
+N 1 256 1 1 1 1
+1 76 3 "" 0
+31 "transform" 0 0 1 0 1 -230 222
+0
+22 115
+"einaus"
+""
+1 16 198 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+115 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 198 222 224
+3
+3
+LANG:10000 17 Ausgang (Publish)
+LANG:10001 16 Output (publish)
+LANG:10027 16 Output (publish)
+
+1
+3
+LANG:10000 19 Eingang (Subscribe)
+LANG:10001 17 Input (subscribe)
+LANG:10027 17 Input (subscribe)
+
+0
+3
+LANG:10000 12 Ein-/Ausgang
+LANG:10001 12 Input/Output
+LANG:10027 12 Input/Output
+
+0
+
+E
+E
+E
+ 0 0
+22 116
+"cmbQos"
+""
+1 226 128 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+116 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  228 128 322 154
+4
+3
+LANG:10000 8 Standard
+LANG:10001 7 Default
+LANG:10027 7 Default
+
+1
+3
+LANG:10000 1 0
+LANG:10001 1 0
+LANG:10027 1 0
+
+0
+3
+LANG:10000 1 1
+LANG:10001 1 1
+LANG:10027 1 1
+
+0
+3
+LANG:10000 1 2
+LANG:10001 1 2
+LANG:10027 1 2
+
+0
+
+E
+E
+E
+ 0 0
+22 117
+"cmbRetain"
+""
+1 326 128 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+117 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  328 128 430 154
+3
+3
+LANG:10000 8 Standard
+LANG:10001 7 Default
+LANG:10027 7 Default
+
+1
+3
+LANG:10000 4 Nein
+LANG:10001 2 No
+LANG:10027 2 No
+
+0
+3
+LANG:10000 2 Ja
+LANG:10001 3 Yes
+LANG:10027 3 Yes
+
+0
+
+E
+E
+E
+ 0 0
+13 118
+"cmdBrokers"
+""
+1 201 74 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
+ E E
+118 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 29 Broker anlegen und bearbeiten
+LANG:10001 23 Create and edit brokers
+LANG:10027 23 Create and edit brokers
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  194 62 222 90
+
+T 
+3
+LANG:10000 3 ...
+LANG:10001 3 ...
+LANG:10027 3 ...
+"#uses \"rsmqtt\"
+
+main()
+{
+  dyn_float df;
+  dyn_string ds;
+  ChildPanelOnCentralModalReturn(\"para/rsmqtt_brokers.pnl\", \"MQTT broker (rsmqtt)\",
+                                 makeDynString(\"$broker:\" + cmbBroker.text), df, ds);
+
+  // the broker list may have changed; take over the broker chosen there
+  string broker = cmbBroker.text;
+  if ( dynlen(df) > 0 && df[1] == 1 && dynlen(ds) > 0 && ds[1] != \"\" )
+    broker = ds[1];
+  cmbBroker.items = rsmqttGetAllBrokers();
+  cmbBroker.text = broker;
+  int drv = rsmqttGetBrokerDriver(broker);
+  if ( drv > 0 )
+    Treiber.text = drv;
+  lblBrokerState.text = rsmqttBrokerStatusLine(broker);
+  lblBrokerState.foreCol = \"_3DText\";
+}" 0
+ E E E
+22 119
+"cmbBroker"
+""
+1 16 63 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+119 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  18 63 190 89
+0
+
+"#uses \"rsmqtt\"
+
+main()
+{
+  string current = this.text;
+  this.editable = TRUE;
+  this.items = rsmqttGetAllBrokers();
+  this.text = current;
+}" 0
+
+"#uses \"rsmqtt\"
+
+main()
+{
+  string broker = this.text;
+  int drv = rsmqttGetBrokerDriver(broker);
+  if ( drv > 0 )
+    Treiber.text = drv;
+  lblBrokerState.text = rsmqttBrokerStatusLine(broker);
+  lblBrokerState.foreCol = \"_3DText\";
+}" 0
+
+E
+ 0 0
+1 77 4 "" 0
+0
+0
+LAYER, 1 
+1
+LANG:10000 6 Layer2
+0
+LAYER, 2 
+1
+LANG:10000 6 Layer3
+0
+LAYER, 3 
+1
+LANG:10000 6 Layer4
+0
+LAYER, 4 
+1
+LANG:10000 6 Layer5
+0
+LAYER, 5 
+1
+LANG:10000 6 Layer6
+0
+LAYER, 6 
+1
+LANG:10000 6 Layer7
+0
+LAYER, 7 
+1
+LANG:10000 6 Layer8
+0
+3 0 "" -1
+"layoutAlignment" "AlignCenter"
+"" ""
+"para/dpe.pnl" 308 10 T 0 1 0 1 2 0
+1
+"$DPE""$1"
+3 1 "" -1
+"layoutAlignment" "AlignCenter"
+"" ""
+"para/lock_unlock.pnl" 6 12 T 0 1 0 1 0 -3
+1
+"$1""$1"
+3 2 "" -1
+"layoutAlignment" "AlignCenter"
+"" ""
+"para/buttons.pnl" 220 440 T 0 1 0 1 -210 5
+0
+3 3 "Group5" -1
+"layoutAlignment" "AlignCenter"
+"" ""
+"para/refAddressActive.pnl" 10 450 T 36 1 0 1 330 -224
+0
+3 4 "PANEL_REF1" -1
+"layoutAlignment" "AlignNone"
+"" ""
+"para/addressVerifyButton.pnl" 246 440 T 44 1 0 1 -1 0
+1
+"$1""$1"
+0

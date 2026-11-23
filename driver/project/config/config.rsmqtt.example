@@ -1,0 +1,69 @@
+# Example [rsmqtt] section for the project's config/config file.
+# Start the driver in the console as:  WCCOArsmqtt -num <driverNumber>
+# Settings for one driver number only go into [rsmqtt_<num>].
+# Option names: see crates/rsmqtt/include/rsmqtt.h (Paho C field names).
+#
+# Brokers are usually datapoints of type _RsMqttBroker (create them with
+# rsmqttCreateBroker() from scripts/libs/rsmqtt.ctl). The section below is
+# only needed for brokers configured in the config file instead, and for
+# the global settings. All entries are optional.
+
+[rsmqtt]
+# DP (type _RsMqttDriver) whose .Brokers lists the broker DPs of this driver.
+# Default: _RsMqttDriver_<num>
+# driverDp = "_RsMqttDriver_2"
+# Largest value the driver publishes (bytes). Default 65536.
+maxPayload = 65536
+# Library trace into the log: 0 off, 1 error, 2 warn, 3 info, 4 debug, 5 trace
+traceLevel = 0
+# WinCC OA driver setting: output queue to the Event Manager, in values.
+# The default (number of addresses, at least 1000) overflows on message bursts;
+# WinCC OA then keeps only the newest value per DPE (_Driver<num>.OV = TRUE).
+# About 100 bytes per queued value, used only while a burst is processed.
+maxOutputQueueSize = 1000000
+
+# ---------------------------------------------------------------- plain TCP
+connection = "plant"
+serverURI = "tcp://broker.local:1883"
+# fail-over list:
+# serverURIs = "tcp://broker1:1883 tcp://broker2:1883"
+# default client id: WCCOArsmqtt_<num>_<connection>
+clientId = "winccoa-plant"
+# 3 = 3.1, 4 = 3.1.1, 5 = 5.0
+MQTTVersion = 5
+keepAliveInterval = 30
+cleanstart = 0
+# v5: keep the session for 1 h
+sessionExpiryInterval = 3600
+username = "winccoa"
+# plain text, or encrypted with _DriverSecurity.PublicKey: rsmqttEncryptPassword("secret")
+password = "secret"
+will.topic = "winccoa/plant/status"
+will.payload = "offline"
+will.qos = 1
+will.retained = 1
+# driver settings for this connection
+subscribeQoS = 1
+publishQoS = 1
+publishRetain = 0
+# retry interval of failed connects (s)
+reconnectInterval = 10
+
+# ---------------------------------------------------------------- TLS
+connection = "cloud"
+serverURI = "mqtts://mqtt.example.com:8883"
+ssl.trustStore = "C:/WinCC_OA_Proj/myproj/config/certs/ca.pem"
+# client certificate (mutual TLS)
+ssl.keyStore = "C:/WinCC_OA_Proj/myproj/config/certs/client.pem"
+ssl.privateKey = "C:/WinCC_OA_Proj/myproj/config/certs/client.key"
+# also check the host name
+ssl.verify = 1
+# keep QoS 1/2 in-flight messages across restarts
+persistence = "file"
+persistenceDir = "C:/WinCC_OA_Proj/myproj/data/rsmqtt"
+
+# ---------------------------------------------------------------- WebSocket via proxy
+connection = "ws"
+serverURI = "wss://mqtt.example.com/mqtt"
+httpsProxy = "http://proxy.local:3128"
+httpHeader = "Authorization: Bearer abc"
