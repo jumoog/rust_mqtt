@@ -476,9 +476,9 @@ LANG:10000 76 Zeitstempel: ISO 8601 oder Sekunden/ms seit 1970.  dyn-Elemente: J
 LANG:10001 72 Timestamp: ISO 8601 or seconds/ms since 1970.  dyn elements: JSON array.
 LANG:10027 72 Timestamp: ISO 8601 or seconds/ms since 1970.  dyn elements: JSON array.
 2 115
-"lblBrokerState"
+"lblHint5"
 ""
-1 20 398 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+1 20 390 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
  E E
 115 0 0 0 0 0
 E E E
@@ -493,20 +493,20 @@ LANG:10027 0
 "layoutAlignment" "AlignCenter"
 "dashclr"N "_Transparent"
 "antiAliased" "0"
-E E 0 1 1 0 1 E U  1 E 20 398 600 412
-0 0 0 "0s" 0 0 0 192 0 0  20 398 1
+E E 0 1 1 0 1 E U  1 E 20 390 600 404
+0 0 0 "0s" 0 0 0 192 0 0  20 390 1
 3
 LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 0 3
-LANG:10000 0 
-LANG:10001 0 
-LANG:10027 0 
-14 116
-"txtTopic"
+LANG:10000 90 Sparkplug B: Topic $spb/<Gruppe>/<Edge Node>[/<Gerät>], Option metric=<Name> oder online.
+LANG:10001 87 Sparkplug B: topic $spb/<group>/<edge node>[/<device>], option metric=<name> or online.
+LANG:10027 87 Sparkplug B: topic $spb/<group>/<edge node>[/<device>], option metric=<name> or online.
+2 116
+"lblBrokerState"
 ""
-1 226 63 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+1 20 412 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
  E E
 116 0 0 0 0 0
 E E E
@@ -516,18 +516,25 @@ LANG:10000 0
 LANG:10001 0 
 LANG:10027 0 
 
-1
+4
+"sizePolicy" "Fixed Fixed"
 "layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 20 412 600 426
+0 0 0 "0s" 0 0 0 192 0 0  20 412 1
 3
 LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-0  228 63 492 89
-3 "1000s" 1000 0 0 0 0 -1  E E E
+0 3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
 14 117
-"txtOptions"
+"txtTopic"
 ""
-1 226 198 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+1 226 63 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
 117 0 0 0 0 0
 E E E
@@ -543,14 +550,35 @@ LANG:10027 0
 LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  228 63 492 89
+3 "1000s" 1000 0 0 0 0 -1  E E E
+14 118
+"txtOptions"
+""
+1 226 198 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+118 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 0  228 198 492 224
 3 "255s" 255 0 0 0 0 -1  E E E
-20 118
+20 119
 "chkJson"
 ""
 1 20 278 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
  E E
-118 0 0 0 0 0
+119 0 0 0 0 0
 E E E
 0
 3
@@ -584,31 +612,10 @@ E E
 E"main(int button, bool state)
 {
 }" 0
-14 119
+14 120
 "txtJsonPath"
 ""
 1 226 276 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
- E E
-119 0 0 0 0 0
-E E E
-0
-3
-LANG:10000 0 
-LANG:10001 0 
-LANG:10027 0 
-
-1
-"layoutAlignment" "AlignCenter"
-3
-LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-0  228 276 358 302
-3 "255s" 255 0 0 0 0 -1  E E E
-14 120
-"txtTsPath"
-""
-1 360 276 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
 120 0 0 0 0 0
 E E E
@@ -624,14 +631,35 @@ LANG:10027 0
 LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  228 276 358 302
+3 "255s" 255 0 0 0 0 -1  E E E
+14 121
+"txtTsPath"
+""
+1 360 276 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+121 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 0  362 276 492 302
 3 "255s" 255 0 0 0 0 -1  E E E
-22 121
+22 122
 "trans_art"
 ""
 1 16 128 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
-121 0 0 0 0 0
+122 0 0 0 0 0
 E E E
 0
 3
@@ -774,12 +802,12 @@ N 1 256 1 1 1 1
 1 76 3 "" 0
 31 "transform" 0 0 1 0 1 -230 222
 0
-22 122
+22 123
 "einaus"
 ""
 1 16 198 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
-122 0 0 0 0 0
+123 0 0 0 0 0
 E E E
 0
 3
@@ -818,12 +846,12 @@ E
 E
 E
  0 0
-22 123
+22 124
 "cmbQos"
 ""
 1 226 128 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
-123 0 0 0 0 0
+124 0 0 0 0 0
 E E E
 0
 3
@@ -868,12 +896,12 @@ E
 E
 E
  0 0
-22 124
+22 125
 "cmbRetain"
 ""
 1 326 128 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
-124 0 0 0 0 0
+125 0 0 0 0 0
 E E E
 0
 3
@@ -912,12 +940,12 @@ E
 E
 E
  0 0
-13 125
+13 126
 "cmdBrokers"
 ""
 1 201 74 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
  E E
-125 0 0 0 0 0
+126 0 0 0 0 0
 E E E
 0
 3
@@ -960,12 +988,12 @@ main()
   lblBrokerState.foreCol = \"_3DText\";
 }" 0
  E E E
-22 126
+22 127
 "cmbBroker"
 ""
 1 16 63 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
-126 0 0 0 0 0
+127 0 0 0 0 0
 E E E
 0
 3

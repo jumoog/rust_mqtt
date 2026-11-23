@@ -278,52 +278,25 @@ Variable *RsMqttTrans::textToItem(std::string_view text, bool jsonString, std::s
 
 VariablePtr RsMqttTrans::toDynVar(std::string_view payload) const
 {
-  namespace J = RsMqttJson;
-  std::unique_ptr<DynVar> d(new DynVar(itemType()));
-  std::string why;
-
-  auto add = [&](std::string_view text, bool jsonString) {
-    std::unique_ptr<Variable> item(textToItem(text, jsonString, why));
-    if ( !item ) return false;
-    d->append(*item);
-    return true;
-  };
-
-  std::string_view t = payload;
-  while ( !t.empty() && std::isspace(static_cast<unsigned char>(t.front())) ) t.remove_prefix(1);
-  while ( !t.empty() && std::isspace(static_cast<unsigned char>(t.back())) ) t.remove_suffix(1);
-  if ( t.empty() )
-    return d.release();  // no items
-
-  J::Value v;
+  // a JSON array, one value or nothing (rsmqtt-wincc, json::dyn_items)
+  std::vector<std::pair<std::string, bool>> items;
   std::string err;
-  if ( J::get(t, J::Path(), v, err) != J::Found::Yes )
+  if ( !RsMqttJson::dynItems(payload, items, err) )
   {
-    // not JSON: the payload is a single value
-    if ( !add(payload, false) ) { convError("toVar", why.c_str()); return nullptr; }
-    return d.release();
+    convError("toVar", CharString(err.c_str()) + " in " + shown(payload).c_str());
+    return nullptr;
   }
-
-  std::vector<J::Value> items;
-  if ( v.kind == J::Kind::Array )
-  {
-    if ( !J::parseArray(v.text, items, err) ) { convError("toVar", err.c_str()); return nullptr; }
-  }
-  else if ( v.kind != J::Kind::Null )
-    items.push_back(std::move(v));  // a single value
-
+  std::unique_ptr<DynVar> d(new DynVar(itemType()));
   for (size_t i = 0; i < items.size(); i++)
   {
-    if ( items[i].kind == J::Kind::Null )
-    {
-      convError("toVar", CharString("null at index ") + CharString((int) i) + " of " + shown(payload).c_str());
-      return nullptr;
-    }
-    if ( !add(items[i].text, items[i].kind == J::Kind::String) )
+    std::string why;
+    std::unique_ptr<Variable> item(textToItem(items[i].first, items[i].second, why));
+    if ( !item )
     {
       convError("toVar", CharString("item ") + CharString((int) i) + ": " + why.c_str());
       return nullptr;
     }
+    d->append(*item);
   }
   return d.release();
 }

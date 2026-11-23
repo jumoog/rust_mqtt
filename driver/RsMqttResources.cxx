@@ -145,6 +145,15 @@ PVSSboolean RsMqttResources::readSection()
       if ( s < 0.1 ) s = 0.1;
       current->reconnectInterval = std::chrono::milliseconds((long long) (s * 1000));
     }
+    else if ( current && kw.icmp("sparkplug.hostId") == 0 )
+    {
+      CharString value;
+      getCfgStream() >> value;
+      if ( value.len() && !RsMqttSparkplug::validId((const char *) value) )
+        cfgError(CharString("connection '") + current->name.c_str() + "': sparkplug.hostId must not contain / + #");
+      else
+        current->spbHostId = (const char *) value;
+    }
     else if ( std::string reduName; RsMqttRedu::splitReduOption((const char *) kw, reduName) )
     {
       // redu.<option> = value: only for the second redundant host

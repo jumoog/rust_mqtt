@@ -15,39 +15,42 @@ set(TARGET WCCOArsmqtt)
 
 # ----------------------------------------------------------------------------
 # rsmqtt (Rust) - built with cargo, linked statically
+#
+# rsmqtt_wincc.lib (crates/rsmqtt-wincc) holds the driver logic that needs no
+# WinCC OA API (address syntax, JSON, Sparkplug B, redundancy names) and the
+# rsmqtt client ABI: one Rust library, as two would bring the Rust standard
+# library into the executable twice.
 
 set(RSMQTT_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/.. CACHE PATH "root of the rsmqtt cargo workspace")
 find_program(CARGO cargo HINTS "$ENV{USERPROFILE}/.cargo/bin" "$ENV{HOME}/.cargo/bin" REQUIRED)
 
 if ( WIN32 )
-  set(RSMQTT_LIB ${RSMQTT_ROOT}/target/release/rsmqtt.lib)
-  # from: cargo rustc -p rsmqtt --release -- --print native-static-libs
+  set(RSMQTT_LIB ${RSMQTT_ROOT}/target/release/rsmqtt_wincc.lib)
+  # from: cargo rustc -p rsmqtt-wincc --release -- --print native-static-libs
   set(RSMQTT_SYSLIBS bcrypt advapi32 kernel32 ntdll userenv ws2_32 dbghelp synchronization crypt32 secur32 ncrypt)
 else()
-  set(RSMQTT_LIB ${RSMQTT_ROOT}/target/release/librsmqtt.a)
+  set(RSMQTT_LIB ${RSMQTT_ROOT}/target/release/librsmqtt_wincc.a)
   set(RSMQTT_SYSLIBS pthread dl m)
 endif()
 
 add_custom_target(rsmqtt_cargo
-  COMMAND ${CARGO} build --release -p rsmqtt
+  COMMAND ${CARGO} build --release -p rsmqtt-wincc
   WORKING_DIRECTORY ${RSMQTT_ROOT}
   BYPRODUCTS ${RSMQTT_LIB}
-  COMMENT "Building rsmqtt (Rust, cargo build --release)"
+  COMMENT "Building rsmqtt-wincc and rsmqtt (Rust, cargo build --release)"
   USES_TERMINAL
 )
 
 add_library(rsmqtt STATIC IMPORTED)
 set_target_properties(rsmqtt PROPERTIES
   IMPORTED_LOCATION ${RSMQTT_LIB}
-  INTERFACE_INCLUDE_DIRECTORIES ${RSMQTT_ROOT}/crates/rsmqtt/include
+  INTERFACE_INCLUDE_DIRECTORIES "${RSMQTT_ROOT}/crates/rsmqtt/include;${RSMQTT_ROOT}/crates/rsmqtt-wincc/include"
   INTERFACE_LINK_LIBRARIES "${RSMQTT_SYSLIBS}"
 )
 
 # ----------------------------------------------------------------------------
 
 set(SOURCES
-  RsMqttAddress.cxx
-  RsMqttJson.cxx
   RsMqttRedu.cxx
   RsMqttBrokerDp.cxx
   RsMqttConnections.cxx

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/rsmqtt"]
+members = ["crates/rsmqtt", "crates/rsmqtt-wincc"]
 
 [workspace.package]
 version = "0.1.0"

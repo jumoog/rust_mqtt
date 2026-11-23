@@ -14,48 +14,21 @@
 //     applies to host 2 only, e.g. redu.serverURI or redu.clientId; with
 //     redu.clientId the "_2" is not appended.
 //
-// The functions in the first part have no WinCC OA dependencies.
+// The name rules are implemented in Rust (crates/rsmqtt-wincc/src/redu.rs);
+// which host this is comes from WinCC OA (RsMqttRedu.cxx).
 #ifndef RSMQTT_REDU_HXX
 #define RSMQTT_REDU_HXX
 
-#include <cctype>
+#include <rsmqtt_wincc.hpp>
+
 #include <string>
 
 namespace RsMqttRedu
 {
-  constexpr const char *SUFFIX = "_2";
-
-  /// The name a host uses: "<base>" on host 1, "<base>_2" on host 2.
-  inline std::string forHost(const std::string &base, bool host2)
-  {
-    return host2 ? base + SUFFIX : base;
-  }
-
-  /// TRUE if a name ends with "_2", which is the host-2 twin of another name.
-  inline bool endsWithSuffix(const std::string &name)
-  {
-    return name.size() > 2 && name.compare(name.size() - 2, 2, SUFFIX) == 0;
-  }
-
-  /// "redu.<option>" (any case): TRUE and option = "<option>".
-  inline bool splitReduOption(const std::string &name, std::string &option)
-  {
-    if ( name.size() <= 5 ) return false;
-    for (size_t i = 0; i < 5; i++)
-      if ( std::tolower((unsigned char) name[i]) != "redu."[i] ) return false;
-    option = name.substr(5);
-    return true;
-  }
-
-  /// The client id a host connects with. An empty id (assigned by the
-  /// broker) stays empty; an explicit redu.clientId is used as it is.
-  inline std::string clientIdForHost(const std::string &clientId, bool host2, bool reduClientIdGiven)
-  {
-    if ( !host2 || reduClientIdGiven || clientId.empty() ) return clientId;
-    return clientId + SUFFIX;
-  }
-
-  //----------------------------------------------------------------- WinCC OA
+  using rsmqtt::wincc::redu::forHost;
+  using rsmqtt::wincc::redu::endsWithSuffix;
+  using rsmqtt::wincc::redu::splitReduOption;
+  using rsmqtt::wincc::redu::clientIdForHost;
 
   /// The project is redundant (two event managers).
   bool isRedundant();

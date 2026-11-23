@@ -136,6 +136,7 @@ void RsMqttHWService::stop()
   for (auto &c : conns)
   {
     if ( !c->client ) continue;
+    sparkplugGoodbye(*c);
     try
     {
       pending.emplace_back(c.get(), c->client->disconnect(std::chrono::seconds(2)));
@@ -157,6 +158,7 @@ void RsMqttHWService::stop()
     if ( c->isActive() )
       c->lastError = "driver stopped";
     pushState(*c);
+    sparkplugOffline(*c);
     publishBrokerState(*c, true);
   }
   rsmqtt_set_trace_callback(0, nullptr, nullptr);
@@ -190,6 +192,7 @@ void RsMqttHWService::teardown(RsMqttConnection &conn)
 {
   if ( conn.client )
   {
+    sparkplugGoodbye(conn);
     try
     {
       rsmqtt::Token t = conn.client->disconnect(std::chrono::milliseconds(500));
@@ -207,6 +210,7 @@ void RsMqttHWService::teardown(RsMqttConnection &conn)
   conn.subscribeTokens.clear();
   conn.serverUri.clear();
   pushState(conn);
+  sparkplugOffline(conn);
 }
 
 void RsMqttHWService::reconfigure(RsMqttConnection &conn)
@@ -370,6 +374,7 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
         // Subscribing again also makes the broker resend retained values,
         // like a general query.
         conn.subscribeAll();
+        sparkplugConnected(conn);
         break;
 
       case rsmqtt::EventType::ConnectionLost:
@@ -377,6 +382,7 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
         conn.lastError = "connection lost";
         log(ErrClass::PRIO_WARNING, "workProc", "[" + conn.name + "] connection lost");
         pushState(conn);
+        sparkplugOffline(conn);
         break;
 
       case rsmqtt::EventType::Disconnected:
@@ -384,6 +390,7 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
         conn.lastError = std::string(ev->text());
         log(ErrClass::PRIO_WARNING, "workProc", "[" + conn.name + "] " + conn.lastError);
         pushState(conn);
+        sparkplugOffline(conn);
         break;
 
       case rsmqtt::EventType::Complete:
@@ -431,13 +438,18 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
 
 //--------------------------------------------------------------------------------
 
-void RsMqttHWService::deliver(const std::string &address, std::string_view payload, const TimeVar &time, bool periphTime)
+void RsMqttHWService::deliver(const std::string &address, std::string_view payload, const TimeVar &time, bool periphTime,
+                              int validity)
 {
   HWObject obj;
   obj.setAddress(address.c_str());
   obj.setOrgTime(time);
   if ( periphTime )
     obj.setTimeOfPeriphFlag();  // otherwise WinCC OA stamps the value itself
+  if ( validity == 2 )
+    obj.setSbit(DRV_INVALID);
+  else if ( validity == 1 )
+    obj.clearSbit(DRV_INVALID);
 
   // HWObject owns and frees its buffer (delete[])
   PVSSchar *buf = new PVSSchar[payload.size() ? payload.size() : 1];
@@ -476,11 +488,11 @@ void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub,
         d.json = true;
         d.dyn = addr->dyn;
         d.valueId = sub.extractor.add(addr->jsonPath);
-        d.jsonPath = J::toString(addr->jsonPath);
+        d.jsonPath = J::pathString(addr->jsonPath);
         if ( addr->hasTs )
         {
           d.tsId = sub.extractor.add(addr->tsPath);
-          d.tsPath = J::toString(addr->tsPath);
+          d.tsPath = J::pathString(addr->tsPath);
         }
       }
       sub.plan.push_back(std::move(d));
@@ -492,7 +504,7 @@ void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub,
 
   // one pass over the payload for all paths of this subscription
   if ( !sub.extractor.empty() )
-    sub.extractor.run(payload, jsonResults, jsonErr);
+    sub.extractor.run(payload);
 
   for (const auto &d : sub.plan)
   {
@@ -502,32 +514,35 @@ void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub,
       continue;
     }
 
-    const J::Extractor::Result &r = jsonResults[(size_t) d.valueId];
-    if ( r.found == J::Found::Missing )
+    J::Kind kind;
+    std::string_view value;
+    J::Found found = sub.extractor.result(d.valueId, kind, value);
+    if ( found == J::Found::Missing )
     {
       jsonProblem(d.address, "the JSON payload has no value at " + d.jsonPath);
       continue;
     }
-    if ( r.found == J::Found::NotJson )
+    if ( found == J::Found::NotJson )
     {
-      jsonProblem(d.address, "the payload is not JSON: " + jsonErr);
+      jsonProblem(d.address, "the payload is not JSON: " + sub.extractor.error());
       continue;
     }
-    if ( r.value.kind == J::Kind::Null )
+    if ( kind == J::Kind::Null )
       continue;  // no value, nothing to update
     // dyn: RsMqttTrans reads a JSON array or one value; a string stays a JSON
     // string so that its text is one item, even if it looks like an array
     std::string quoted;
-    if ( d.dyn && r.value.kind == J::Kind::String )
-      quoted = J::quote(r.value.text);
-    std::string_view text = quoted.empty() ? std::string_view(r.value.text) : std::string_view(quoted);
+    if ( d.dyn && kind == J::Kind::String )
+      quoted = J::quote(value);
+    std::string_view text = quoted.empty() ? value : std::string_view(quoted);
 
     TimeVar time;  // current time
     if ( d.tsId >= 0 )
     {
-      const J::Extractor::Result &t = jsonResults[(size_t) d.tsId];
+      J::Kind tsKind;
+      std::string_view tsValue;
       long long ms = 0;
-      if ( t.found != J::Found::Yes || !J::parseTime(t.value, ms) )
+      if ( sub.extractor.result(d.tsId, tsKind, tsValue) != J::Found::Yes || !J::parseTime(tsKind, tsValue, ms) )
       {
         jsonProblem(d.address, "no valid timestamp at " + d.tsPath + ", the current time is used");
         deliver(d.address, text, time);
@@ -544,19 +559,164 @@ void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub,
 
 void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
 {
+  // our own STATE: another client (an earlier session's will) set it offline
+  if ( !conn.spbHostId.empty() && topic == RsMqttSparkplug::stateTopic(conn.spbHostId) )
+  {
+    std::string err;
+    RsMqttJson::Value v;
+    if ( RsMqttJson::get(payload, "online", v, err) == RsMqttJson::Found::Yes && v.text == "false" && conn.client )
+      conn.client->publish(topic, RsMqttSparkplug::statePayload(true, conn.spbStateTs), 1, true);
+    return;
+  }
+
   // exact subscriptions
   auto it = conn.subscriptions.find(topic);
   if ( it != conn.subscriptions.end() && !it->second.matching )
     deliverToSubscription(it->second, payload);
 
   // wildcard and shared subscriptions
+  bool sparkplugDone = false;
   for (const auto &filter : conn.matchingFilters)
   {
     if ( !RsMqttAddress::topicMatches(filter, topic) ) continue;
     auto s = conn.subscriptions.find(filter);
     if ( s == conn.subscriptions.end() ) continue;
+    if ( s->second.sparkplug )
+    {
+      if ( !sparkplugDone ) sparkplugMessage(conn, topic, payload);  // once per message
+      sparkplugDone = true;
+      continue;
+    }
     deliverToSubscription(s->second, payload);
   }
+}
+
+//--------------------------------------------------------------------------------
+// Sparkplug B host application
+
+static int64_t nowMs()
+{
+  return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+static TimeVar timeOfMs(int64_t ms)
+{
+  long long sec = ms >= 0 ? ms / 1000 : -((-ms + 999) / 1000);
+  return TimeVar((time_t) sec, (PVSSshort) (ms - sec * 1000));
+}
+
+void RsMqttHWService::sparkplugMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
+{
+  std::vector<RsMqttSparkplug::Update> updates;
+  std::vector<RsMqttSparkplug::Message> publish;
+  std::vector<std::string> warnings;
+  conn.spb.onMessage(topic, payload, nowMs(), updates, publish, warnings);
+  for (const auto &w : warnings)
+    log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] " + w);
+  for (const auto &m : publish)
+  {
+    try
+    {
+      if ( conn.client ) conn.client->publish(m.topic, m.payload, 0, false);  // commands: QoS 0
+    }
+    catch (const rsmqtt::Error &e)
+    {
+      log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] " + m.topic + ": " + e.what());
+    }
+  }
+  sparkplugApply(conn, updates);
+}
+
+void RsMqttHWService::sparkplugApply(RsMqttConnection &conn, const std::vector<RsMqttSparkplug::Update> &updates)
+{
+  using Kind = RsMqttSparkplug::Update::Kind;
+  RsMqttConnections &conns = RsMqttConnections::instance();
+  for (const auto &u : updates)
+  {
+    auto k = conn.spbIndex.find(RsMqttConnection::spbKey(u.group, u.node, u.device, u.metric, u.kind == Kind::Online));
+    if ( k == conn.spbIndex.end() )
+      continue;
+    for (const auto &a : k->second)
+    {
+      const std::string &address = a.first;
+      switch ( u.kind )
+      {
+        case Kind::Value:
+        {
+          // dyn: a string stays one item, even if it looks like an array
+          const RsMqttAddress *addr = conns.parsed(address);
+          std::string text = addr && addr->dyn && u.isString ? RsMqttJson::quote(u.text) : u.text;
+          deliver(address, text, u.hasTime ? timeOfMs(u.timeMs) : TimeVar(), u.hasTime, 1);
+          conn.spbLast[address] = text;
+          break;
+        }
+        case Kind::Stale:
+        {
+          // the last value again, invalid (nothing to send before the first one)
+          auto last = conn.spbLast.find(address);
+          if ( last != conn.spbLast.end() )
+            deliver(address, last->second, TimeVar(), false, 2);
+          break;
+        }
+        case Kind::Online:
+          deliver(address, u.online ? "1" : "0", TimeVar(), false, 1);
+          break;
+      }
+    }
+  }
+}
+
+void RsMqttHWService::sparkplugConnected(RsMqttConnection &conn)
+{
+  if ( !conn.client )
+    return;
+  // the host application is online: subscriptions first, then STATE (Sparkplug 3.0)
+  if ( !conn.spbHostId.empty() )
+  {
+    std::string topic = RsMqttSparkplug::stateTopic(conn.spbHostId);
+    try
+    {
+      conn.client->subscribe(topic, 1);
+      conn.client->publish(topic, RsMqttSparkplug::statePayload(true, conn.spbStateTs), 1, true);
+    }
+    catch (const rsmqtt::Error &e)
+    {
+      log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] STATE: " + e.what());
+    }
+  }
+  // edge nodes and devices count as offline until their birth
+  for (const auto &k : conn.spbIndex)
+  {
+    if ( k.first.empty() || k.first.back() != '\x01' ) continue;  // online keys end with \x01
+    for (const auto &a : k.second)
+    {
+      const RsMqttAddress *addr = RsMqttConnections::instance().parsed(a.first);
+      if ( addr && !conn.spb.isOnline(addr->spbGroup, addr->spbNode, addr->spbDevice) )
+        deliver(a.first, "0", TimeVar(), false, 1);
+    }
+  }
+}
+
+void RsMqttHWService::sparkplugGoodbye(RsMqttConnection &conn)
+{
+  // a clean disconnect sends no will: the host application says offline itself
+  if ( conn.spbHostId.empty() || !conn.client || !conn.connected )
+    return;
+  try
+  {
+    conn.client->publish(RsMqttSparkplug::stateTopic(conn.spbHostId),
+                         RsMqttSparkplug::statePayload(false, conn.spbStateTs), 1, true);
+  }
+  catch (const rsmqtt::Error &)
+  {
+  }
+}
+
+void RsMqttHWService::sparkplugOffline(RsMqttConnection &conn)
+{
+  std::vector<RsMqttSparkplug::Update> updates;
+  conn.spb.onConnectionLost(updates);
+  sparkplugApply(conn, updates);
 }
 
 void RsMqttHWService::pushState(RsMqttConnection &conn)
@@ -599,7 +759,8 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
     log(ErrClass::PRIO_WARNING, "writeData", "no active MQTT connection for address '" + name + "'");
     return PVSS_FALSE;
   }
-  if ( addr->isState || RsMqttAddress::isWildcardFilter(addr->topic) )
+  // (a Sparkplug metric's topic is its edge node's filter; it is written as NCMD / DCMD below)
+  if ( addr->isState || (RsMqttAddress::isWildcardFilter(addr->topic) && !(addr->sparkplug && !addr->spbOnline)) )
   {
     log(ErrClass::PRIO_WARNING, "writeData", "address '" + name + "' cannot be written");
     return PVSS_FALSE;
@@ -621,6 +782,31 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
   }
 
   std::string_view payload(reinterpret_cast<const char *>(data + 4), n);
+
+  // Sparkplug: NCMD / DCMD with the data type of the metric's birth
+  if ( addr->sparkplug )
+  {
+    RsMqttSparkplug::Message cmd;
+    std::string err;
+    if ( addr->spbOnline || !conn->spb.command(addr->spbGroup, addr->spbNode, addr->spbDevice, addr->spbMetric,
+                                               payload, nowMs(), cmd, err) )
+    {
+      log(ErrClass::PRIO_WARNING, "writeData", "address '" + name + "': " + (addr->spbOnline ? "cannot be written" : err));
+      return PVSS_FALSE;
+    }
+    try
+    {
+      conn->client->publish(cmd.topic, cmd.payload, 0, false);  // commands: QoS 0, not retained
+      conn->messagesOut++;
+    }
+    catch (const rsmqtt::Error &e)
+    {
+      log(ErrClass::PRIO_WARNING, "writeData", "[" + conn->name + "] " + cmd.topic + ": " + e.what());
+      return PVSS_FALSE;
+    }
+    return PVSS_TRUE;
+  }
+
   std::string json;
   if ( addr->json )
   {
@@ -629,13 +815,15 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
     namespace T = RsMqttTransformationType;
     TransformationType t = objPtr->getType();
     bool plain = addr->dyn || (t >= T::Int32 && t <= T::Float) || t == T::Bool;
-    std::vector<std::pair<const RsMqttJson::Path *, std::string>> members;
-    members.emplace_back(&addr->jsonPath, plain ? std::string(payload) : RsMqttJson::quote(payload));
+    std::string value = plain ? std::string(payload) : RsMqttJson::quote(payload), timeValue;
+    std::vector<std::pair<std::string_view, std::string_view>> members;
+    members.emplace_back(addr->jsonPath, value);
     if ( addr->hasTs )
     {
       const TimeVar &tm = objPtr->getOrgTime();
       long long ms = (long long) tm.getSeconds() * 1000 + tm.getMilli();
-      members.emplace_back(&addr->tsPath, RsMqttJson::quote(RsMqttJson::isoTime(ms)));
+      timeValue = RsMqttJson::quote(RsMqttJson::isoTime(ms));
+      members.emplace_back(addr->tsPath, timeValue);
     }
     std::string err;
     if ( !RsMqttJson::build(members, json, err) )

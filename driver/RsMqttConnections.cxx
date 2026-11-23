@@ -90,6 +90,16 @@ void RsMqttConnection::applyReduOption(const std::string &option, const std::str
 rsmqtt::Options RsMqttConnection::clientOptions() const
 {
   rsmqtt::Options o = options;
+  // Sparkplug host application: its STATE turns offline with the will
+  if ( !spbHostId.empty() )
+  {
+    spbStateTs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                   std::chrono::system_clock::now().time_since_epoch()).count();
+    o.set("will.topic", RsMqttSparkplug::stateTopic(spbHostId))
+     .set("will.payload", RsMqttSparkplug::statePayload(false, spbStateTs))
+     .set("will.qos", 1)
+     .set("will.retained", true);
+  }
   // the redundant hosts must not share a client id
   std::string id = RsMqttRedu::clientIdForHost(clientId, RsMqttRedu::isHost2(), reduClientId);
   if ( id != clientId )
@@ -113,6 +123,13 @@ rsmqtt::Options RsMqttConnection::clientOptions() const
 }
 
 //--------------------------------------------------------------------------------
+
+std::string RsMqttConnection::spbKey(const std::string &group, const std::string &node, const std::string &device,
+                                     const std::string &metric, bool online)
+{
+  // \x1f does not occur in ids (and an online key has no metric)
+  return group + '\x1f' + node + '\x1f' + device + '\x1f' + (online ? std::string("\x01") : metric);
+}
 
 RsMqttConnection::RsMqttConnection(const std::string &n)
   : name(n), options(defaultOptions(n)), clientId(defaultClientId(n)) {}
@@ -152,6 +169,7 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
     autoReconnect = true;  // driver default, see defaultOptions()
     clientId = defaultClientId(name);
     reduClientId = false;
+    spbHostId.clear();
     persistence = -1;
     persistenceDirSet = false;
     persistenceDir.clear();
@@ -205,6 +223,16 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
         return false;
       }
       std::string optName = opt.substr(0, eq), value = opt.substr(eq + 1), reduName;
+      if ( normalizedOptionName(trimmed(optName)) == "sparkplug.hostid" )
+      {
+        spbHostId = trimmed(value);
+        if ( !spbHostId.empty() && !RsMqttSparkplug::validId(spbHostId) )
+        {
+          err = "sparkplug.hostId must not contain / + #";
+          return false;
+        }
+        continue;
+      }
       if ( RsMqttRedu::splitReduOption(trimmed(optName), reduName) )
       {
         redu.emplace_back(trimmed(reduName), value);
@@ -449,7 +477,8 @@ bool RsMqttConnections::addAddress(const std::string &fullAddress, const RsMqttA
     conn->statePushNeeded = true;  // HWService writes the current state
     return isNew;
   }
-  if ( !input )
+  // Sparkplug outputs subscribe too: commands need the data types of the births
+  if ( !input && !addr.sparkplug )
     return isNew;
 
   int qos = addr.qos >= 0 ? addr.qos : conn->subscribeQoS;
@@ -462,6 +491,12 @@ bool RsMqttConnections::addAddress(const std::string &fullAddress, const RsMqttA
   sub.matching = addr.needsMatching();
   sub.addresses[fullAddress]++;
   sub.planDirty = true;
+  if ( addr.sparkplug )
+  {
+    sub.sparkplug = true;
+    if ( input )
+      conn->spbIndex[RsMqttConnection::spbKey(addr)][fullAddress]++;
+  }
   if ( sub.matching )
     conn->matchingFilters.insert(addr.topic);
 
@@ -492,8 +527,24 @@ bool RsMqttConnections::removeAddress(const std::string &fullAddress, const RsMq
       conn->stateAddresses.erase(s);
     return last;
   }
-  if ( !input )
+  if ( !input && !addr.sparkplug )
     return last;
+
+  if ( addr.sparkplug && input )
+  {
+    auto k = conn->spbIndex.find(RsMqttConnection::spbKey(addr));
+    if ( k != conn->spbIndex.end() )
+    {
+      auto a = k->second.find(fullAddress);
+      if ( a != k->second.end() && --a->second == 0 )
+      {
+        k->second.erase(a);
+        conn->spbLast.erase(fullAddress);
+      }
+      if ( k->second.empty() )
+        conn->spbIndex.erase(k);
+    }
+  }
 
   auto s = conn->subscriptions.find(addr.topic);
   if ( s == conn->subscriptions.end() )

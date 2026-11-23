@@ -44,6 +44,7 @@ while (auto ev = cli.poll()) {
 
 - **Poll based.** Operations return a token right away. Results, incoming messages and connection changes go into a per-client queue that the host drains with `poll()`. The library never calls into the host from its own threads, except for an optional notify callback and the trace callback. That suits WinCC OA's single-threaded manager loop.
 - **C ABI underneath.** Rust can't export a C++ ABI, so `rsmqtt.h` is the binary interface and `rsmqtt.hpp` adds RAII and exceptions on top. Nothing is generated and the build isn't tied to a particular MSVC toolset.
+- **Driver logic in Rust too.** [crates/rsmqtt-wincc](crates/rsmqtt-wincc) holds everything in the driver that needs no WinCC OA API: the address syntax, the JSON paths and the one-pass extractor, the dyn value lists, the redundancy names and the Sparkplug B host (protobuf types from [srad-types](https://crates.io/crates/srad-types)). Its ABI is `rsmqtt_wincc.h`, wrapped by `rsmqtt_wincc.hpp`. The crate links `rsmqtt` into one static library, `rsmqtt_wincc.lib`, so the Rust standard library is in the executable only once.
 - `waitForCompletion(token, timeout)` gives the blocking style of Paho's `MQTTClient`.
 
 ## Building
@@ -51,7 +52,7 @@ while (auto ev = cli.poll()) {
 Requirements: Rust (MSVC target), Visual Studio with C++ tools, CMake, and the WinCC OA 3.21 API.
 
 ```powershell
-cargo build --release -p rsmqtt
+cargo build --release -p rsmqtt-wincc
 ```
 
 ```powershell
@@ -66,7 +67,7 @@ cmake -S driver -B driver/build -G "Visual Studio 18 2026" -A x64
 cmake --build driver/build --config RelWithDebInfo
 ```
 
-The driver's CMake runs `cargo build --release` on its own. The result is `driver/build/RelWithDebInfo/WCCOArsmqtt.exe`; copy it into the project's `bin` directory.
+The driver's CMake runs `cargo build --release -p rsmqtt-wincc` on its own and links `target/release/rsmqtt_wincc.lib` (the client library alone is `cargo build --release -p rsmqtt`). The result is `driver/build/RelWithDebInfo/WCCOArsmqtt.exe`; copy it into the project's `bin` directory.
 
 ## Driver usage
 
@@ -162,6 +163,8 @@ rsmqttSetAddress("Pump1.hum",      "plant:line1/pump1;json=data.hum;ts=data.time
 
 `<broker>:<topic>[;qos=0|1|2][;retain[=0|1]][;nolocal][;rap][;rh=0|1|2][;json[=<path>]][;ts=<path>]`
 
+`<broker>:$spb/<group>/<edge node>[/<device>];metric=<name>|;online` (Sparkplug B, see below)
+
 - Input addresses subscribe. Filters with `+` / `#` and `$share/<group>/â€¦` work too, and every matching message updates the DPE.
 - Output addresses publish when the DPE changes.
 - `$state` is the connection state: 1 while connected, otherwise 0.
@@ -212,6 +215,25 @@ Where options behave differently from Paho C (paho.mqtt.rust with rustls):
 - `httpProxy` / `httpsProxy` apply to `ws://` / `wss://` only; `tcp://` and `ssl://` connect directly.
 - MQTT 5: `CleanSession=FALSE` keeps the session only together with `sessionExpiryInterval=<s>` in `Config.Options` (the expiry defaults to 0, so the session ends with the connection).
 
+### Sparkplug B
+
+The driver is a Sparkplug B (3.0) Host Application: it receives the data of edge nodes and their devices and writes to them with commands.
+
+```
+rsmqttSetAddress("Line1.temp",   "plant:$spb/Factory/Line1;metric=temp",               RSMQTT_FLOAT, RSMQTT_IN,  2);
+rsmqttSetAddress("PLC7.speed",   "plant:$spb/Factory/Line1/PLC7;metric=Motor/speed",   RSMQTT_INT32, RSMQTT_IO,  2);
+rsmqttSetAddress("PLC7.online",  "plant:$spb/Factory/Line1/PLC7;online",               RSMQTT_BOOL,  RSMQTT_IN,  2);
+```
+
+- `$spb/<group>/<edge node>` addresses the edge node's own metrics, `$spb/<group>/<edge node>/<device>` a device. `metric=<name>` names the metric (names with `/` are fine, `;` is not); `online` is 1 between birth and death, else 0.
+- For each edge node the driver subscribes `spBv1.0/<group>/+/<edge node>/#` and decodes the protobuf payloads: NBIRTH/DBIRTH (values, data types, aliases), NDATA/DDATA (also by alias only), NDEATH/DDEATH. Values keep the metric's timestamp as source time.
+- After a death, or when the connection to the broker is lost, the metrics keep their last value with the invalid bit set until the next birth. An NDEATH whose `bdSeq` does not match the current birth (a late will of an earlier session) is ignored.
+- If the driver misses something (data before the birth, a gap in `seq`, an unknown alias or metric), it asks the edge node for a rebirth (NCMD `Node Control/Rebirth`, at most every 5 s per edge node).
+- Output and input/output addresses write with NCMD (edge node) or DCMD (device), with the data type from the birth; before the birth a write fails with a log entry.
+- Data types: integers, Float, Double, Boolean, String/Text/UUID, DateTime (milliseconds since 1970), Bytes/File (blob) and all array types (JSON arrays, for dyn DPEs). DataSet and Template metrics are read as JSON text (`{"columns":[...],"types":[...],"rows":[[...]]}`, and an object of the template's member metrics); they can't be written. PropertySets are metadata and are skipped, as are historical metrics.
+- `sparkplug.hostId=<id>` in `Config.Options` (or `sparkplug.hostId = "<id>"` in the config file) makes the driver the primary host application: after connecting it publishes `spBv1.0/STATE/<id>` `{"online":true,"timestamp":...}` (retained, QoS 1), with `{"online":false,...}` as will and before a clean disconnect, so that edge nodes following that host rebirth when it comes back. Sparkplug expects a clean session for the host (`CleanSession` TRUE, the default).
+- [tests/broker/spb_edge.py](tests/broker/spb_edge.py) simulates an edge node for the tests (no third-party modules).
+
 ### Redundancy
 
 In a redundant project the driver works like the WinCC OA drivers:
@@ -234,7 +256,7 @@ docker run -d --name rsmqtt-mosq -p 18830:1883 -p 18831:9001 -v "${PWD}\tests\mo
 $env:RSMQTT_TEST_URI="tcp://localhost:18830"; $env:RSMQTT_TEST_WS_URI="ws://localhost:18831"; cargo test
 ```
 
-The broker tests cover v3.1, v3.1.1 and v5 round trips at QoS 0â€“2, WebSocket, TLS (when `RSMQTT_TEST_TLS_URI` and `RSMQTT_TEST_CA` are set), v5 properties and subscription options, will messages, retained messages, offline buffering and error codes. [examples/cpp](examples/cpp) has a C++ publish/subscribe example and the unit test for the driver's address parser.
+The broker tests cover v3.1, v3.1.1 and v5 round trips at QoS 0â€“2, WebSocket, TLS (when `RSMQTT_TEST_TLS_URI` and `RSMQTT_TEST_CA` are set), v5 properties and subscription options, will messages, retained messages, offline buffering and error codes. `cargo test -p rsmqtt-wincc` tests the driver logic (addresses, JSON, dyn lists, redundancy names, Sparkplug decoding and commands) without a broker. [examples/cpp](examples/cpp) has a C++ publish/subscribe example and `wincc_test`, which checks that values, strings with NUL bytes, errors and handles cross the `rsmqtt_wincc` C ABI.
 
 ### Connection option tests in WinCC OA
 
@@ -263,6 +285,7 @@ anytype res; evalScript(res, src, makeDynString(), "tls"); return res;
 | `ws` | `httpHeader`, `httpProxy` / `httpsProxy` with and without credentials |
 | `connect` | `connectTimeout`, `ServerURIs` fail-over, empty client id, keep alive, runtime/event options, `maxInflight`, unknown option, bad value |
 | `v5` | CONNECT properties, `maximumPacketSize` |
+| `spb` | Sparkplug B: STATE and will, NBIRTH/DBIRTH with all value kinds, NDATA by alias, DDATA, seq gap -> rebirth, NCMD/DCMD writes, DDEATH/NDEATH (bdSeq) -> invalid, rebirth -> valid |
 | `redu` | redundancy on host 1: `redu.*` options checked but not applied, unknown `redu.*` option |
 | `dyn` | dyn_float / int / long / string / bool from JSON arrays and single values, `[]`, bad items, arrays at a JSON path, JSON array output |
 | `json` | `json=` paths (nested, array, quoted name, whole payload), string escapes, objects as text, `ts=` as ISO 8601 and epoch ms, non-JSON payloads, JSON output with timestamp |

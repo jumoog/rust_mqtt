@@ -768,6 +768,162 @@ void redu()
   cleanup();
 }
 
+/** Runs `python spb_edge.py pub <topic> <seq> <metrics...>` (tests/broker/spb_edge.py). */
+void spbPub(string topic, string seq, dyn_string metrics)
+{
+  string cmd = "python C:/Repos/rust_mqtt/tests/broker/spb_edge.py pub " + topic + " " + seq;
+  for (int i = 1; i <= dynlen(metrics); i++)
+    cmd += " " + winArg(metrics[i]);
+  sh(cmd);
+}
+
+/** Captures the next message on `topic` into /tmp/<fileName> in the broker container. */
+void spbCapture(string topic, string fileName)
+{
+  sh("docker exec -d " + BROKER_CONTAINER + " sh -c \"mosquitto_sub -p 1883 -N -C 1 -W 10 -t " + topic + " > /tmp/" + fileName + "\"");
+}
+
+string spbDecode(string fileName)
+{
+  return sh("python C:/Repos/rust_mqtt/tests/broker/spb_edge.py decode /tmp/" + fileName);
+}
+
+void ensureSpbDp()
+{
+  if ( dynlen(dpTypes("RsMqttSpbT")) == 0 )
+  {
+    dyn_string el = makeDynString("temp", "count", "on", "name", "vals", "nodeOnline", "speed", "run", "devOnline",
+                                  "setpoint", "cmdSetpoint", "cmdCount");
+    dyn_int    ty = makeDynInt(DPEL_FLOAT, DPEL_INT, DPEL_BOOL, DPEL_STRING, DPEL_DYN_FLOAT, DPEL_BOOL, DPEL_INT, DPEL_BOOL,
+                               DPEL_BOOL, DPEL_FLOAT, DPEL_FLOAT, DPEL_INT);
+    dyn_dyn_string n; dyn_dyn_int t;
+    n[1] = makeDynString("RsMqttSpbT", ""); t[1] = makeDynInt(DPEL_STRUCT);
+    for (int i = 1; i <= dynlen(el); i++) { n[i + 1] = makeDynString("", el[i]); t[i + 1] = makeDynInt(0, ty[i]); }
+    dpTypeCreate(n, t);
+  }
+  if ( !dpExists("RsMqttSpb1") )
+    dpCreate("RsMqttSpb1", "RsMqttSpbT");
+}
+
+bool invalidOf(string dpe)
+{
+  bool inv;
+  dpGet(dpe + ":_original.._invalid", inv);
+  return inv;
+}
+
+/** Sparkplug B host application against a simulated edge node. */
+void sparkplug()
+{
+  ensureSpbDp();
+  string d = "RsMqttSpb1.";
+  string g = "OptG", n = "E" + rnd(2), host = "opt-host-" + rnd(2);
+  string pre = "o_spb:$spb/" + g + "/" + n;
+  string nodeT = "spBv1.0/" + g, stateT = "spBv1.0/STATE/" + host;
+
+  broker("o_spb", makeMapping("ServerURI", "tcp://localhost:18840", "Options", makeDynString("sparkplug.hostId=" + host)));
+  string s = waitState("o_spb", 3, 8);
+  delay(1);
+  string state = sh("docker exec " + BROKER_CONTAINER + " mosquitto_sub -p 1883 -t " + stateT + " -C 1 -W 3");
+  result("STATE online (retained) after connecting", stateOf(s) == 3 && strpos(state, "\"online\":true") >= 0, state);
+
+  setAddr(d + "temp",        pre + ";metric=temp", 1, 1006);
+  setAddr(d + "count",       pre + ";metric=count", 1, 1002);
+  setAddr(d + "on",          pre + ";metric=on", 1, 1007);
+  setAddr(d + "name",        pre + ";metric=name", 1, 1001);
+  setAddr(d + "vals",        pre + ";metric=vals", 1, 1006);
+  setAddr(d + "nodeOnline",  pre + ";online", 1, 1007);
+  setAddr(d + "speed",       pre + "/PLC7;metric=Motor/speed", 1, 1002);
+  setAddr(d + "run",         pre + "/PLC7;metric=Motor/run", 1, 1007);
+  setAddr(d + "devOnline",   pre + "/PLC7;online", 1, 1007);
+  setAddr(d + "setpoint",    pre + "/PLC7;metric=setpoint", 1, 1006);
+  setAddr(d + "cmdSetpoint", pre + "/PLC7;metric=setpoint", 2, 1006);
+  setAddr(d + "cmdCount",    pre + ";metric=count", 2, 1002);
+  delay(1);
+
+  spbPub(nodeT + "/NBIRTH/" + n, "0", makeDynString("bdSeq:Int64=5", "temp:Double=21.5@1", "count:Int32=-7@2", "on:Boolean=true",
+         "name:String=Pump 7", "vals:FloatArray=[1.5,2]", "Node Control/Rebirth:Boolean=false"));
+  spbPub(nodeT + "/DBIRTH/" + n + "/PLC7", "1", makeDynString("Motor/speed:Int32=1450", "Motor/run:Boolean=true", "setpoint:Double=10"));
+  delay(1);
+  float temp, setpoint; int count, speed; bool on, run, nodeOn, devOn; string name; dyn_float vals;
+  dpGet(d + "temp", temp, d + "count", count, d + "on", on, d + "name", name, d + "vals", vals, d + "nodeOnline", nodeOn,
+        d + "speed", speed, d + "run", run, d + "devOnline", devOn, d + "setpoint", setpoint);
+  result("NBIRTH: Double, Int32 (negative), Boolean, String, FloatArray -> dyn_float",
+         temp == 21.5 && count == -7 && on && name == "Pump 7" && dynlen(vals) == 2 && vals[1] == 1.5 && vals[2] == 2,
+         temp + " " + count + " " + on + " '" + name + "' " + dynlen(vals));
+  result("DBIRTH: device metrics (name with '/')", speed == 1450 && run && setpoint == 10, speed + " " + run + " " + setpoint);
+  result(";online of edge node and device", nodeOn && devOn, nodeOn + " " + devOn);
+
+  spbPub(nodeT + "/NDATA/" + n, "2", makeDynString("@1:Double=22.25", "count:Int32=-8"));
+  spbPub(nodeT + "/DDATA/" + n + "/PLC7", "3", makeDynString("Motor/speed:Int32=1500"));
+  delay(1);
+  dpGet(d + "temp", temp, d + "count", count, d + "speed", speed);
+  result("NDATA by alias and by name, DDATA", temp == 22.25 && count == -8 && speed == 1500, temp + " " + count + " " + speed);
+
+  // a gap in seq: the data counts, and the driver asks for a rebirth
+  spbCapture(nodeT + "/NCMD/" + n, "ncmd.bin");
+  delay(1);
+  spbPub(nodeT + "/NDATA/" + n, "9", makeDynString("temp:Double=23"));
+  delay(1);
+  string rb = spbDecode("ncmd.bin");
+  dpGet(d + "temp", temp);
+  result("seq gap: rebirth requested (NCMD Node Control/Rebirth)",
+         strpos(rb, "Node Control/Rebirth") >= 0 && strpos(rb, "true") >= 0 && temp == 23, rb);
+
+  // writes: DCMD / NCMD with the data type of the birth
+  spbCapture(nodeT + "/DCMD/" + n + "/PLC7", "dcmd.bin");
+  delay(1);
+  dpSetWait(d + "cmdSetpoint", 12.5);
+  delay(1);
+  string dc = spbDecode("dcmd.bin");
+  result("write -> DCMD (Double from DBIRTH)", strpos(dc, "\"datatype\": \"Double\"") >= 0 && strpos(dc, "\"name\": \"setpoint\"") >= 0 &&
+         strpos(dc, "12.5") >= 0, dc);
+  spbCapture(nodeT + "/NCMD/" + n, "ncmd2.bin");
+  delay(1);
+  dpSetWait(d + "cmdCount", -3);
+  delay(1);
+  string nc = spbDecode("ncmd2.bin");
+  result("write -> NCMD (Int32 from NBIRTH)", strpos(nc, "\"datatype\": \"Int32\"") >= 0 && strpos(nc, "\"value\": -3") >= 0, nc);
+
+  // deaths: stale values become invalid, online 0
+  spbPub(nodeT + "/DDEATH/" + n + "/PLC7", "10", makeDynString());
+  delay(1);
+  dpGet(d + "devOnline", devOn, d + "nodeOnline", nodeOn);
+  result("DDEATH: device offline, its metrics invalid, the node's valid",
+         !devOn && nodeOn && invalidOf(d + "speed") && invalidOf(d + "run") && !invalidOf(d + "temp"),
+         devOn + " " + nodeOn + " speed invalid " + invalidOf(d + "speed") + ", temp invalid " + invalidOf(d + "temp"));
+  spbPub(nodeT + "/NDEATH/" + n, "-", makeDynString("bdSeq:Int64=4"));
+  delay(1);
+  dpGet(d + "nodeOnline", nodeOn);
+  result("NDEATH of an earlier session (bdSeq 4) is ignored", nodeOn && !invalidOf(d + "temp"), nodeOn + "");
+  spbPub(nodeT + "/NDEATH/" + n, "-", makeDynString("bdSeq:Int64=5"));
+  delay(1);
+  dpGet(d + "nodeOnline", nodeOn);
+  result("NDEATH (bdSeq 5): node offline, its metrics invalid", !nodeOn && invalidOf(d + "temp") && invalidOf(d + "count"),
+         nodeOn + " temp invalid " + invalidOf(d + "temp"));
+
+  spbPub(nodeT + "/NBIRTH/" + n, "0", makeDynString("bdSeq:Int64=6", "temp:Double=30", "count:Int32=1"));
+  delay(1);
+  dpGet(d + "temp", temp, d + "nodeOnline", nodeOn);
+  result("NBIRTH again: valid values, online", temp == 30 && nodeOn && !invalidOf(d + "temp"), temp + " " + nodeOn);
+
+  // a clean disconnect sends no will: the driver says offline itself
+  dpSetWait("_RsMqtt_o_spb.Config.Active", FALSE);
+  waitState("o_spb", 0, 5);
+  delay(1);
+  state = sh("docker exec " + BROKER_CONTAINER + " mosquitto_sub -p 1883 -t " + stateT + " -C 1 -W 3");
+  dpGet(d + "nodeOnline", nodeOn);
+  result("Active=FALSE: STATE offline, edge node offline and invalid",
+         strpos(state, "\"online\":false") >= 0 && !nodeOn && invalidOf(d + "temp"), state);
+  mosqPub("-r -n -t " + stateT);   // no retained STATE left behind
+
+  if ( gKeep ) { dpSetWait("_RsMqtt_o_spb.Config.Active", TRUE); return; }
+  dyn_string all = makeDynString("temp", "count", "on", "name", "vals", "nodeOnline", "speed", "run", "devOnline",
+                                 "setpoint", "cmdSetpoint", "cmdCount");
+  for (int i = 1; i <= dynlen(all); i++) dpSetWait(d + all[i] + ":_address.._type", 0, d + all[i] + ":_distrib.._type", 0);
+  cleanup();
+}
+
 dyn_string main(string group)
 {
   gKeep = strpos(group, ":keep") > 0;
@@ -784,7 +940,8 @@ dyn_string main(string group)
     case "session":       session(); break;
     case "json":          json(); break;
     case "dyn":           dynTypes(); break;
-    case "redu":          redu(); break;    case "buffer":        buffer(); break;
+    case "redu":          redu(); break;
+    case "spb":           sparkplug(); break;    case "buffer":        buffer(); break;
     case "will_arm":      will_arm(); break;
     case "will_check":    will_check(); break;
     case "persist_arm":   persist_arm(); break;

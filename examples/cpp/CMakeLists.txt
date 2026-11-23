@@ -34,6 +34,18 @@ add_executable(pubsub pubsub.cpp)
 target_link_libraries(pubsub rsmqtt)
 add_dependencies(pubsub rsmqtt_cargo)
 
-# unit test of the driver's address parser / topic matcher
-add_executable(address_test address_test.cpp ${RSMQTT_ROOT}/driver/RsMqttAddress.cxx ${RSMQTT_ROOT}/driver/RsMqttJson.cxx)
-target_include_directories(address_test PRIVATE ${RSMQTT_ROOT}/driver)
+# test of the rsmqtt-wincc C ABI (driver logic in Rust) through its C++ wrapper
+if ( WIN32 )
+  set(RSMQTT_WINCC_LIB ${RSMQTT_ROOT}/target/release/rsmqtt_wincc.lib)
+else()
+  set(RSMQTT_WINCC_LIB ${RSMQTT_ROOT}/target/release/librsmqtt_wincc.a)
+endif()
+add_custom_target(rsmqtt_wincc_cargo
+  COMMAND ${CARGO} build --release -p rsmqtt-wincc
+  WORKING_DIRECTORY ${RSMQTT_ROOT}
+  BYPRODUCTS ${RSMQTT_WINCC_LIB}
+  USES_TERMINAL)
+add_executable(wincc_test wincc_test.cpp)
+target_include_directories(wincc_test PRIVATE ${RSMQTT_ROOT}/crates/rsmqtt/include ${RSMQTT_ROOT}/crates/rsmqtt-wincc/include)
+target_link_libraries(wincc_test ${RSMQTT_WINCC_LIB} ${RSMQTT_SYSLIBS})
+add_dependencies(wincc_test rsmqtt_wincc_cargo)

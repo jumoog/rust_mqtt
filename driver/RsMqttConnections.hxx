@@ -12,6 +12,8 @@
 #define RSMQTT_CONNECTIONS_HXX
 
 #include "RsMqttAddress.hxx"
+#include "RsMqttJson.hxx"
+#include "RsMqttSparkplug.hxx"
 #include <rsmqtt.hpp>
 
 #include <chrono>
@@ -46,6 +48,7 @@ class RsMqttConnection
     std::chrono::milliseconds reconnectInterval{10000};  // retry of failed connects
     std::string     clientId;         // as configured; host 2 connects with "<clientId>_2"
     bool            reduClientId = false;  // redu.clientId given: host 2 uses it as it is
+    std::string     spbHostId;        // sparkplug.hostId: STATE messages and will of the host application
     int             persistence = -1; // explicit persistence=: -1 not set, 0 none/memory, 1 file
     bool            persistenceDirSet = false;
     std::string     persistenceDir;
@@ -101,6 +104,7 @@ class RsMqttConnection
       int  qos = 0;
       int  flags = 0;
       bool matching = false;                // wildcard / shared filter
+      bool sparkplug = false;               // an edge node's filter: messages go to `spb`
       std::map<std::string, int> addresses; // full address -> reference count
 
       /// How a message is handed to the addresses: built from `addresses`
@@ -123,6 +127,18 @@ class RsMqttConnection
     std::map<std::string, Subscription> subscriptions;   // filter -> subscription
     std::set<std::string>               matchingFilters; // subset needing topic matching
     std::map<std::string, int>          stateAddresses;  // "$state" addresses -> ref count
+
+    // ----- Sparkplug B host application (RsMqttSparkplug.hxx)
+    RsMqttSparkplug::Host spb;
+    mutable int64_t spbStateTs = 0;   // timestamp of this client's STATE messages (online and will)
+    std::map<std::string, std::map<std::string, int>> spbIndex;  // spbKey -> input addresses -> ref count
+    std::map<std::string, std::string> spbLast;  // address -> last value, sent again as invalid when stale
+    static std::string spbKey(const std::string &group, const std::string &node, const std::string &device,
+                              const std::string &metric, bool online);
+    static std::string spbKey(const RsMqttAddress &a)
+    {
+      return spbKey(a.spbGroup, a.spbNode, a.spbDevice, a.spbMetric, a.spbOnline);
+    }
     std::map<rsmqtt::Token, std::vector<std::string>> subscribeTokens; // pending SUBSCRIBEs
 
     /// Sends SUBSCRIBE for the given filters (batched). No-op while not connected.

@@ -379,7 +379,11 @@ def address_panel():
             "Zeitstempel: ISO 8601 oder Sekunden/ms seit 1970.  dyn-Elemente: JSON-Array.",
             "Timestamp: ISO 8601 or seconds/ms since 1970.  dyn elements: JSON array.",
             bold=False)
-    p.label("lblBrokerState", 20, 398, 580, "", bold=False)
+    p.label("lblHint5", 20, 390, 580,
+            "Sparkplug B: Topic $spb/<Gruppe>/<Edge Node>[/<Gerät>], Option metric=<Name> oder online.",
+            "Sparkplug B: topic $spb/<group>/<edge node>[/<device>], option metric=<name> or online.",
+            bold=False)
+    p.label("lblBrokerState", 20, 412, 580, "", bold=False)
 
     p.textfield("txtTopic", 228, 63, 492, 89)
     p.textfield("txtOptions", 228, 198, 492, 224, length=255)

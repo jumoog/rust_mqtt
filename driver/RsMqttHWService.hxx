@@ -29,7 +29,15 @@ class RsMqttHWService : public HWService
     void connect(RsMqttConnection &conn);
     void handleEvents(RsMqttConnection &conn);
     /// periphTime: the value carries its own time (ts=), else `time` is the receive time
-    void deliver(const std::string &address, std::string_view payload, const TimeVar &time = TimeVar(), bool periphTime = false);
+    /// validity: 0 leaves the invalid bit alone, 1 clears it, 2 sets it
+    void deliver(const std::string &address, std::string_view payload, const TimeVar &time = TimeVar(),
+                 bool periphTime = false, int validity = 0);
+    // Sparkplug B host application
+    void sparkplugMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload);
+    void sparkplugApply(RsMqttConnection &conn, const std::vector<RsMqttSparkplug::Update> &updates);
+    void sparkplugConnected(RsMqttConnection &conn);
+    void sparkplugOffline(RsMqttConnection &conn);
+    void sparkplugGoodbye(RsMqttConnection &conn);
     void deliverToSubscription(RsMqttConnection::Subscription &sub, std::string_view payload);
     void jsonProblem(const std::string &address, const std::string &text);
     void deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload);
@@ -38,8 +46,6 @@ class RsMqttHWService : public HWService
     void drainTrace();
 
     std::set<std::string> jsonWarned;  // addresses whose last JSON payload did not fit (warned once)
-    std::vector<RsMqttJson::Extractor::Result> jsonResults;  // reused for every message
-    std::string jsonErr;
     bool started = false;
     std::chrono::steady_clock::time_point startTime{};
 };

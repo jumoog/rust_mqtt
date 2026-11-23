@@ -76,9 +76,10 @@ PVSSboolean RsMqttHWMapper::addDpPa(DpIdentifier &dpId, PeriphAddr *confPtr)
   RsMqttConnections &conns = RsMqttConnections::instance();
 
   bool input = isInput(confPtr);
-  if ( !input && (addr.isState || RsMqttAddress::isWildcardFilter(addr.topic)) )
+  bool spbCommand = addr.sparkplug && !addr.spbOnline;  // writes go out as NCMD / DCMD
+  if ( !input && !spbCommand && (addr.isState || RsMqttAddress::isWildcardFilter(addr.topic)) )
   {
-    addrError(CharString("address '") + name.c_str() + "': cannot publish to a topic filter or $state");
+    addrError(CharString("address '") + name.c_str() + "': cannot publish to a topic filter, $state or ;online");
     return TreeHWMapper::addDpPa(dpId, confPtr, HWMapDpPa::AddressError);
   }
 
