@@ -345,3 +345,14 @@ Results on one desktop PC (local mosquitto in Docker; WinCC OA 3.21 DemoApplicat
 Set WinCC OA's driver output queue in the `[rsmqtt]` section of the project config (see the [example](driver/project/config/config.rsmqtt.example)): `maxOutputQueueSize = 1000000`. The default overflows on short spikes; the large value costs memory (about 100 bytes per value) only while a burst is being processed.
 
 **Known issue:** QoS 2 *publishing* slows down disproportionately when tens of thousands of QoS 2 messages are queued at once (15k: 21k msg/s, 150k: 2.7k msg/s). It sits in the outgoing QoS 2 handling of paho.mqtt.rust; QoS 0/1, receiving, and normal QoS 2 rates are not affected.
+
+## License
+
+rsmqtt (both crates, the driver, panels, scripts and tests) is licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this work, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+Third-party code keeps its own license: the libraries and the driver link [paho.mqtt.rust](https://github.com/eclipse/paho.mqtt.rust) (EPL-2.0) and crates under MIT, Apache-2.0, ISC and BSD licenses (`cargo metadata` lists them), and the driver is built against the WinCC OA API, which is Siemens' and not covered by this license. Whoever ships the binaries passes on those licenses' notices.
