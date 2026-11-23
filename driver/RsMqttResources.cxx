@@ -1,5 +1,6 @@
 #include "RsMqttResources.hxx"
 #include "RsMqttConnections.hxx"
+#include "RsMqttRedu.hxx"
 #include "RsMqttSecret.hxx"
 
 #include <ErrHdl.hxx>
@@ -17,6 +18,8 @@ namespace
     std::string name, value;
   };
   std::vector<PendingSecret> pendingSecrets;
+  // redu.<option> entries: applied after all others, on the second redundant host only
+  std::vector<PendingSecret> pendingRedu;
 }
 
 unsigned          RsMqttResources::maxPayload = 65536;
@@ -59,8 +62,29 @@ void RsMqttResources::init(int &argc, char *argv[])
   }
   pendingSecrets.clear();
 
+  for (auto &p : pendingRedu)
+  {
+    std::string value = p.value, err;
+    if ( RsMqttRedu::isHost2() && RsMqttConnection::isSecretOption(p.name) && !RsMqttSecret::reveal(p.value, value, err) )
+    {
+      cfgError(CharString("connection '") + p.connection->name.c_str() + "', redu." + p.name.c_str() + ": " + err.c_str());
+      continue;
+    }
+    try
+    {
+      p.connection->applyReduOption(p.name, value);
+    }
+    catch (const rsmqtt::Error &e)
+    {
+      cfgError(CharString("connection '") + p.connection->name.c_str() + "': " + e.what());
+    }
+  }
+  pendingRedu.clear();
+
   if ( driverDp.len() == 0 )
     driverDp = CharString("_RsMqttDriver_") + CharString((int) getManNum());
+  // the second redundant host uses the "_2" twin (see RsMqttRedu.hxx)
+  driverDp = CharString(RsMqttRedu::forHost((const char *) driverDp, RsMqttRedu::isHost2()).c_str());
 }
 
 //-------------------------------------------------------------------------------
@@ -120,6 +144,16 @@ PVSSboolean RsMqttResources::readSection()
       getCfgStream() >> s;
       if ( s < 0.1 ) s = 0.1;
       current->reconnectInterval = std::chrono::milliseconds((long long) (s * 1000));
+    }
+    else if ( std::string reduName; RsMqttRedu::splitReduOption((const char *) kw, reduName) )
+    {
+      // redu.<option> = value: only for the second redundant host
+      CharString value;
+      getCfgStream() >> value;
+      if ( !current )
+        cfgError(CharString("'") + kw + "' must follow a 'connection = \"<name>\"' entry");
+      else
+        pendingRedu.push_back({current, reduName, std::string((const char *) value)});
     }
     else if ( rsmqtt::Options::isKnown((const char *) kw) )
     {

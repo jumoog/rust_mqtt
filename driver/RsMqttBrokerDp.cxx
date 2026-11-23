@@ -1,4 +1,5 @@
 #include "RsMqttBrokerDp.hxx"
+#include "RsMqttRedu.hxx"
 #include "RsMqttConnections.hxx"
 
 #include <BitVar.hxx>
@@ -115,7 +116,8 @@ void RsMqttDriverIntDp::dpReady()
   if ( getError() )
   {
     ErrHdl::error(ErrClass::PRIO_INFO, ErrClass::ERR_PARAM, ErrClass::NOERR, "RsMqttDriverIntDp", "dpReady",
-                  CharString("datapoint ") + dpName + " (type _RsMqttDriver) not usable; only brokers from the config file are used");
+                  CharString("datapoint ") + dpName + " (type _RsMqttDriver) not usable; only brokers from the config file are used" +
+                  (RsMqttRedu::isHost2() ? " (redundant host 2: create the _2 datapoints with rsmqttUpgradeToRedundant())" : ""));
     return;
   }
   if ( isIdValid(outVersion) )
@@ -124,6 +126,11 @@ void RsMqttDriverIntDp::dpReady()
 
 //================================================================================
 // _RsMqtt_<broker>
+
+CharString RsMqttBrokerIntDp::dpNameOf(const std::string &broker)
+{
+  return CharString(RsMqttRedu::forHost("_RsMqtt_" + broker, RsMqttRedu::isHost2()).c_str());
+}
 
 RsMqttBrokerIntDp::RsMqttBrokerIntDp(const std::string &b)
   : DrvIntDp(maxDP, maxConnect), broker(b)
@@ -208,7 +215,8 @@ void RsMqttBrokerIntDp::dpReady()
   {
     ErrHdl::error(ErrClass::PRIO_SEVERE, ErrClass::ERR_PARAM, ErrClass::UNEXPECTEDSTATE, "RsMqttBrokerIntDp", "dpReady",
                   CharString("broker '") + broker.c_str() + "': datapoint " + dpNameOf(broker) +
-                  " of type _RsMqttBroker is missing or incomplete");
+                  " of type _RsMqttBroker is missing or incomplete" +
+                  (RsMqttRedu::isHost2() ? " (redundant host 2: create the _2 datapoints with rsmqttUpgradeToRedundant())" : ""));
   }
   markDirty(broker);
 }

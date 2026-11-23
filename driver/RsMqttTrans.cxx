@@ -1,9 +1,11 @@
 #include "RsMqttTrans.hxx"
 #include "RsMqttTransformationType.hxx"
 #include "RsMqttResources.hxx"
+#include "RsMqttJson.hxx"
 
 #include <BitVar.hxx>
 #include <BlobVar.hxx>
+#include <DynVar.hxx>
 #include <ErrHdl.hxx>
 #include <FloatVar.hxx>
 #include <IntegerVar.hxx>
@@ -17,8 +19,10 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace T = RsMqttTransformationType;
 
@@ -93,11 +97,17 @@ namespace
     auto r = std::to_chars(buf, buf + sizeof(buf), v);
     return std::string(buf, r.ptr);
   }
+
+  std::string shown(std::string_view payload)
+  {
+    std::string s(payload.substr(0, 64));
+    return "'" + s + (payload.size() > 64 ? "...'" : "'");
+  }
 }
 
 //----------------------------------------------------------------------------
 
-RsMqttTrans::RsMqttTrans(TransformationType t) : type(normalize(t)) {}
+RsMqttTrans::RsMqttTrans(TransformationType t, bool d) : type(normalize(t)), dyn(d) {}
 
 bool RsMqttTrans::isSupported(TransformationType t)
 {
@@ -105,13 +115,19 @@ bool RsMqttTrans::isSupported(TransformationType t)
   return t >= T::String && t <= T::Blob;
 }
 
+bool RsMqttTrans::isSupportedDyn(TransformationType t)
+{
+  t = normalize(t);
+  return t >= T::String && t <= T::Bool;
+}
+
 TransformationType RsMqttTrans::isA() const { return type; }
 
 int RsMqttTrans::itemSize() const { return (int) (RsMqttResources::getMaxPayload() + 4); }
 
-Transformation *RsMqttTrans::clone() const { return new RsMqttTrans(type); }
+Transformation *RsMqttTrans::clone() const { return new RsMqttTrans(type, dyn); }
 
-VariableType RsMqttTrans::getVariableType() const
+VariableType RsMqttTrans::itemType() const
 {
   switch ( type )
   {
@@ -126,7 +142,48 @@ VariableType RsMqttTrans::getVariableType() const
   }
 }
 
+VariableType RsMqttTrans::getVariableType() const
+{
+  return dyn ? DynVar::getDynType(itemType()) : itemType();
+}
+
 //----------------------------------------------------------------------------
+
+bool RsMqttTrans::itemToText(const Variable &var, bool json, std::string &text) const
+{
+  if ( var.isA() != itemType() )
+  {
+    convError("toPeriph", CharString("unexpected variable type ") + CharString((int) var.isA()));
+    return false;
+  }
+  switch ( type )
+  {
+    case T::Int32:  text = numToString((long long) static_cast<const IntegerVar &>(var).getValue()); break;
+    case T::UInt32: text = numToString((unsigned long long) static_cast<const UIntegerVar &>(var).getValue()); break;
+    case T::Int64:  text = numToString((long long) static_cast<const LongVar &>(var).getValue()); break;
+    case T::UInt64: text = numToString((unsigned long long) static_cast<const ULongVar &>(var).getValue()); break;
+    case T::Float:
+    {
+      double d = static_cast<const FloatVar &>(var).getValue();
+      if ( !std::isfinite(d) )
+      {
+        convError("toPeriph", "cannot publish a non-finite float value");
+        return false;
+      }
+      text = numToString(d);  // shortest round-trip representation
+      break;
+    }
+    case T::Bool:   text = static_cast<const BitVar &>(var).getValue() ? "true" : "false"; break;
+    default:
+    {
+      const CharString &s = static_cast<const TextVar &>(var).getString();
+      std::string_view v((const char *) s, s.len());
+      text = json ? RsMqttJson::quote(v) : std::string(v);
+      break;
+    }
+  }
+  return true;
+}
 
 PVSSboolean RsMqttTrans::toPeriph(PVSSchar *dataPtr, PVSSushort len, const Variable &var, const PVSSushort subix) const
 {
@@ -145,38 +202,30 @@ PVSSboolean RsMqttTrans::toPeriph(PVSSchar *dataPtr, PVSSulong len, const Variab
     return PVSS_FALSE;
   }
 
-  switch ( type )
+  if ( dyn )
   {
-    case T::Int32:  text = numToString((long long) static_cast<const IntegerVar &>(var).getValue()); break;
-    case T::UInt32: text = numToString((unsigned long long) static_cast<const UIntegerVar &>(var).getValue()); break;
-    case T::Int64:  text = numToString((long long) static_cast<const LongVar &>(var).getValue()); break;
-    case T::UInt64: text = numToString((unsigned long long) static_cast<const ULongVar &>(var).getValue()); break;
-    case T::Float:
+    // a JSON array, one element per item
+    const DynVar &d = static_cast<const DynVar &>(var);
+    text = "[";
+    for (unsigned int i = 0; i < d.getNumberOfItems(); i++)
     {
-      double d = static_cast<const FloatVar &>(var).getValue();
-      if ( !std::isfinite(d) )
-      {
-        convError("toPeriph", "cannot publish a non-finite float value");
+      const Variable *item = d.getAt(i);
+      std::string t;
+      if ( !item || !itemToText(*item, true, t) )
         return PVSS_FALSE;
-      }
-      text = numToString(d);  // shortest round-trip representation
-      break;
+      if ( i ) text += ',';
+      text += t;
     }
-    case T::Bool:   text = static_cast<const BitVar &>(var).getValue() ? "true" : "false"; break;
-    case T::Blob:
-    {
-      const Blob &b = static_cast<const BlobVar &>(var).getValue();
-      raw = reinterpret_cast<const PVSSchar *>(b.getData());
-      rawLen = b.getLen();
-      break;
-    }
-    default:
-    {
-      const CharString &s = static_cast<const TextVar &>(var).getString();
-      text.assign((const char *) s, s.len());
-      break;
-    }
+    text += ']';
   }
+  else if ( type == T::Blob )
+  {
+    const Blob &b = static_cast<const BlobVar &>(var).getValue();
+    raw = reinterpret_cast<const PVSSchar *>(b.getData());
+    rawLen = b.getLen();
+  }
+  else if ( !itemToText(var, false, text) )
+    return PVSS_FALSE;
 
   if ( !raw )
   {
@@ -203,6 +252,82 @@ PVSSboolean RsMqttTrans::toPeriph(PVSSchar *dataPtr, PVSSulong len, const Variab
 
 //----------------------------------------------------------------------------
 
+Variable *RsMqttTrans::textToItem(std::string_view text, bool jsonString, std::string &why) const
+{
+  if ( type == T::String )
+    return new TextVar(text.data(), text.size());
+  if ( type == T::Blob )
+    return new BlobVar(reinterpret_cast<PVSSuchar *>(const_cast<char *>(text.data())), (PVSSulong) text.size(), true);  // copy
+
+  std::string_view s = jsonString ? text : trim(text);
+  if ( jsonString )
+    while ( !s.empty() && std::isspace(static_cast<unsigned char>(s.front())) ) s.remove_prefix(1);
+  switch ( type )
+  {
+    case T::Int32:  { int32_t v;  if ( parseInt(s, v) ) return new IntegerVar(v);  break; }
+    case T::UInt32: { uint32_t v; if ( parseInt(s, v) ) return new UIntegerVar(v); break; }
+    case T::Int64:  { int64_t v;  if ( parseInt(s, v) ) return new LongVar(v);     break; }
+    case T::UInt64: { uint64_t v; if ( parseInt(s, v) ) return new ULongVar(v);    break; }
+    case T::Float:  { double v;   if ( parseDouble(s, v) ) return new FloatVar(v); break; }
+    case T::Bool:   { bool v;     if ( parseBool(s, v) ) return new BitVar(v ? PVSS_TRUE : PVSS_FALSE); break; }
+    default: break;
+  }
+  why = "cannot convert " + shown(text) + " to the configured data type " + std::to_string((int) type);
+  return nullptr;
+}
+
+VariablePtr RsMqttTrans::toDynVar(std::string_view payload) const
+{
+  namespace J = RsMqttJson;
+  std::unique_ptr<DynVar> d(new DynVar(itemType()));
+  std::string why;
+
+  auto add = [&](std::string_view text, bool jsonString) {
+    std::unique_ptr<Variable> item(textToItem(text, jsonString, why));
+    if ( !item ) return false;
+    d->append(*item);
+    return true;
+  };
+
+  std::string_view t = payload;
+  while ( !t.empty() && std::isspace(static_cast<unsigned char>(t.front())) ) t.remove_prefix(1);
+  while ( !t.empty() && std::isspace(static_cast<unsigned char>(t.back())) ) t.remove_suffix(1);
+  if ( t.empty() )
+    return d.release();  // no items
+
+  J::Value v;
+  std::string err;
+  if ( J::get(t, J::Path(), v, err) != J::Found::Yes )
+  {
+    // not JSON: the payload is a single value
+    if ( !add(payload, false) ) { convError("toVar", why.c_str()); return nullptr; }
+    return d.release();
+  }
+
+  std::vector<J::Value> items;
+  if ( v.kind == J::Kind::Array )
+  {
+    if ( !J::parseArray(v.text, items, err) ) { convError("toVar", err.c_str()); return nullptr; }
+  }
+  else if ( v.kind != J::Kind::Null )
+    items.push_back(std::move(v));  // a single value
+
+  for (size_t i = 0; i < items.size(); i++)
+  {
+    if ( items[i].kind == J::Kind::Null )
+    {
+      convError("toVar", CharString("null at index ") + CharString((int) i) + " of " + shown(payload).c_str());
+      return nullptr;
+    }
+    if ( !add(items[i].text, items[i].kind == J::Kind::String) )
+    {
+      convError("toVar", CharString("item ") + CharString((int) i) + ": " + why.c_str());
+      return nullptr;
+    }
+  }
+  return d.release();
+}
+
 VariablePtr RsMqttTrans::toVar(const PVSSchar *data, const PVSSushort dlen, const PVSSushort subix) const
 {
   return toVar(data, (PVSSulong) dlen, (PVSSulong) subix);
@@ -212,32 +337,12 @@ VariablePtr RsMqttTrans::toVar(const PVSSchar *data, const PVSSulong dlen, const
 {
   std::string_view payload(reinterpret_cast<const char *>(data), data ? dlen : 0);
 
-  if ( type == T::Blob )
-    return new BlobVar(reinterpret_cast<PVSSuchar *>(const_cast<PVSSchar *>(data)), (PVSSulong) payload.size(), true);
-  if ( type == T::String )
-    return new TextVar(payload.data(), payload.size());
+  if ( dyn )
+    return toDynVar(payload);
 
-  std::string_view s = trim(payload);
-  bool ok = false;
-  Variable *var = nullptr;
-
-  switch ( type )
-  {
-    case T::Int32:  { int32_t v;  if ( (ok = parseInt(s, v)) ) var = new IntegerVar(v);  break; }
-    case T::UInt32: { uint32_t v; if ( (ok = parseInt(s, v)) ) var = new UIntegerVar(v); break; }
-    case T::Int64:  { int64_t v;  if ( (ok = parseInt(s, v)) ) var = new LongVar(v);     break; }
-    case T::UInt64: { uint64_t v; if ( (ok = parseInt(s, v)) ) var = new ULongVar(v);    break; }
-    case T::Float:  { double v;   if ( (ok = parseDouble(s, v)) ) var = new FloatVar(v); break; }
-    case T::Bool:   { bool v;     if ( (ok = parseBool(s, v)) ) var = new BitVar(v ? PVSS_TRUE : PVSS_FALSE); break; }
-    default: break;
-  }
-
-  if ( !ok )
-  {
-    std::string shown(payload.substr(0, 64));
-    convError("toVar", CharString("cannot convert payload '") + shown.c_str() +
-              (payload.size() > 64 ? "...'" : "'") + " to the configured data type " + CharString((int) type));
-    return nullptr;
-  }
+  std::string why;
+  Variable *var = textToItem(payload, false, why);
+  if ( !var )
+    convError("toVar", why.c_str());
   return var;
 }

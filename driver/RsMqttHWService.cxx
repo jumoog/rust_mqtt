@@ -2,6 +2,7 @@
 #include "RsMqttBrokerDp.hxx"
 #include "RsMqttConnections.hxx"
 #include "RsMqttResources.hxx"
+#include "RsMqttTransformationType.hxx"
 
 #include <DrvManager.hxx>
 #include <ErrHdl.hxx>
@@ -16,6 +17,7 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace
 {
@@ -429,11 +431,13 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
 
 //--------------------------------------------------------------------------------
 
-void RsMqttHWService::deliver(const std::string &address, std::string_view payload)
+void RsMqttHWService::deliver(const std::string &address, std::string_view payload, const TimeVar &time, bool periphTime)
 {
   HWObject obj;
   obj.setAddress(address.c_str());
-  obj.setOrgTime(TimeVar());  // current time
+  obj.setOrgTime(time);
+  if ( periphTime )
+    obj.setTimeOfPeriphFlag();  // otherwise WinCC OA stamps the value itself
 
   // HWObject owns and frees its buffer (delete[])
   PVSSchar *buf = new PVSSchar[payload.size() ? payload.size() : 1];
@@ -447,13 +451,103 @@ void RsMqttHWService::deliver(const std::string &address, std::string_view paylo
     DrvManager::getSelfPtr()->toDp(&obj, addrObj);
 }
 
+void RsMqttHWService::jsonProblem(const std::string &address, const std::string &text)
+{
+  // once per address until a payload fits again: a topic may carry many messages
+  if ( jsonWarned.insert(address).second )
+    log(ErrClass::PRIO_WARNING, "deliver", "address '" + address + "': " + text + " (logged once until it works again)");
+}
+
+void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub, std::string_view payload)
+{
+  namespace J = RsMqttJson;
+  if ( sub.planDirty )
+  {
+    sub.plan.clear();
+    sub.extractor.clear();
+    RsMqttConnections &conns = RsMqttConnections::instance();
+    for (const auto &a : sub.addresses)
+    {
+      RsMqttConnection::Subscription::Delivery d;
+      d.address = a.first;
+      const RsMqttAddress *addr = conns.parsed(a.first);
+      if ( addr && addr->json )
+      {
+        d.json = true;
+        d.dyn = addr->dyn;
+        d.valueId = sub.extractor.add(addr->jsonPath);
+        d.jsonPath = J::toString(addr->jsonPath);
+        if ( addr->hasTs )
+        {
+          d.tsId = sub.extractor.add(addr->tsPath);
+          d.tsPath = J::toString(addr->tsPath);
+        }
+      }
+      sub.plan.push_back(std::move(d));
+    }
+    sub.planDirty = false;
+    // addresses changed: a new or changed configuration warns again
+    jsonWarned.clear();
+  }
+
+  // one pass over the payload for all paths of this subscription
+  if ( !sub.extractor.empty() )
+    sub.extractor.run(payload, jsonResults, jsonErr);
+
+  for (const auto &d : sub.plan)
+  {
+    if ( !d.json )
+    {
+      deliver(d.address, payload);
+      continue;
+    }
+
+    const J::Extractor::Result &r = jsonResults[(size_t) d.valueId];
+    if ( r.found == J::Found::Missing )
+    {
+      jsonProblem(d.address, "the JSON payload has no value at " + d.jsonPath);
+      continue;
+    }
+    if ( r.found == J::Found::NotJson )
+    {
+      jsonProblem(d.address, "the payload is not JSON: " + jsonErr);
+      continue;
+    }
+    if ( r.value.kind == J::Kind::Null )
+      continue;  // no value, nothing to update
+    // dyn: RsMqttTrans reads a JSON array or one value; a string stays a JSON
+    // string so that its text is one item, even if it looks like an array
+    std::string quoted;
+    if ( d.dyn && r.value.kind == J::Kind::String )
+      quoted = J::quote(r.value.text);
+    std::string_view text = quoted.empty() ? std::string_view(r.value.text) : std::string_view(quoted);
+
+    TimeVar time;  // current time
+    if ( d.tsId >= 0 )
+    {
+      const J::Extractor::Result &t = jsonResults[(size_t) d.tsId];
+      long long ms = 0;
+      if ( t.found != J::Found::Yes || !J::parseTime(t.value, ms) )
+      {
+        jsonProblem(d.address, "no valid timestamp at " + d.tsPath + ", the current time is used");
+        deliver(d.address, text, time);
+        continue;
+      }
+      long long sec = ms >= 0 ? ms / 1000 : -((-ms + 999) / 1000);
+      time = TimeVar((time_t) sec, (PVSSshort) (ms - sec * 1000));
+    }
+    if ( !jsonWarned.empty() )
+      jsonWarned.erase(d.address);
+    deliver(d.address, text, time, d.tsId >= 0);
+  }
+}
+
 void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
 {
   // exact subscriptions
   auto it = conn.subscriptions.find(topic);
   if ( it != conn.subscriptions.end() && !it->second.matching )
-    for (const auto &a : it->second.addresses)
-      deliver(a.first, payload);
+    deliverToSubscription(it->second, payload);
 
   // wildcard and shared subscriptions
   for (const auto &filter : conn.matchingFilters)
@@ -461,8 +555,7 @@ void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &
     if ( !RsMqttAddress::topicMatches(filter, topic) ) continue;
     auto s = conn.subscriptions.find(filter);
     if ( s == conn.subscriptions.end() ) continue;
-    for (const auto &a : s->second.addresses)
-      deliver(a.first, payload);
+    deliverToSubscription(s->second, payload);
   }
 }
 
@@ -527,6 +620,32 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
     return PVSS_FALSE;
   }
 
+  std::string_view payload(reinterpret_cast<const char *>(data + 4), n);
+  std::string json;
+  if ( addr->json )
+  {
+    // numbers, bool and dyn (a JSON array) are JSON as RsMqttTrans writes
+    // them, text and blobs become strings
+    namespace T = RsMqttTransformationType;
+    TransformationType t = objPtr->getType();
+    bool plain = addr->dyn || (t >= T::Int32 && t <= T::Float) || t == T::Bool;
+    std::vector<std::pair<const RsMqttJson::Path *, std::string>> members;
+    members.emplace_back(&addr->jsonPath, plain ? std::string(payload) : RsMqttJson::quote(payload));
+    if ( addr->hasTs )
+    {
+      const TimeVar &tm = objPtr->getOrgTime();
+      long long ms = (long long) tm.getSeconds() * 1000 + tm.getMilli();
+      members.emplace_back(&addr->tsPath, RsMqttJson::quote(RsMqttJson::isoTime(ms)));
+    }
+    std::string err;
+    if ( !RsMqttJson::build(members, json, err) )
+    {
+      log(ErrClass::PRIO_WARNING, "writeData", "address '" + name + "': " + err);
+      return PVSS_FALSE;
+    }
+    payload = json;
+  }
+
   int  qos = addr->qos >= 0 ? addr->qos : conn->publishQoS;
   bool retain = addr->retain >= 0 ? addr->retain != 0 : conn->publishRetain;
 
@@ -535,7 +654,7 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
 
   try
   {
-    conn->client->publish(addr->topic, std::string_view(reinterpret_cast<const char *>(data + 4), n), qos, retain);
+    conn->client->publish(addr->topic, payload, qos, retain);
     conn->messagesOut++;
   }
   catch (const rsmqtt::Error &e)

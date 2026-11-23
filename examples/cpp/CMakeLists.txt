@@ -35,5 +35,5 @@ target_link_libraries(pubsub rsmqtt)
 add_dependencies(pubsub rsmqtt_cargo)
 
 # unit test of the driver's address parser / topic matcher
-add_executable(address_test address_test.cpp ${RSMQTT_ROOT}/driver/RsMqttAddress.cxx)
+add_executable(address_test address_test.cpp ${RSMQTT_ROOT}/driver/RsMqttAddress.cxx ${RSMQTT_ROOT}/driver/RsMqttJson.cxx)
 target_include_directories(address_test PRIVATE ${RSMQTT_ROOT}/driver)

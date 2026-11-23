@@ -1,5 +1,6 @@
 #include "RsMqttConnections.hxx"
 #include "RsMqttBrokerDp.hxx"
+#include "RsMqttRedu.hxx"
 #include "RsMqttSecret.hxx"
 
 #include <ErrHdl.hxx>
@@ -63,6 +64,8 @@ void RsMqttConnection::noteOption(const std::string &name, const std::string &va
     v += (char) std::tolower((unsigned char) ch);
   if ( n == "automaticreconnect" )
     autoReconnect = (v == "1" || v == "true" || v == "yes" || v == "on");
+  else if ( n == "clientid" )
+    clientId = value;
   else if ( n == "persistence" )
     persistence = (v == "file" || v == "default" || v == "1") ? 1 : 0;  // same names as rsmqtt
   else if ( n == "persistencedir" )
@@ -72,12 +75,30 @@ void RsMqttConnection::noteOption(const std::string &name, const std::string &va
   }
 }
 
+void RsMqttConnection::applyReduOption(const std::string &option, const std::string &value)
+{
+  if ( !rsmqtt::Options::isKnown(option) )
+    throw rsmqtt::Error(RSMQTT_UNKNOWN_OPTION, "unknown option 'redu." + option + "'");
+  if ( !RsMqttRedu::isHost2() )
+    return;
+  options.set(option, value);
+  noteOption(option, value);
+  if ( normalizedOptionName(option) == "clientid" )
+    reduClientId = true;
+}
+
 rsmqtt::Options RsMqttConnection::clientOptions() const
 {
+  rsmqtt::Options o = options;
+  // the redundant hosts must not share a client id
+  std::string id = RsMqttRedu::clientIdForHost(clientId, RsMqttRedu::isHost2(), reduClientId);
+  if ( id != clientId )
+    o.set("clientId", id);
+
   // as in rsmqtt: persistenceDir alone means file, an explicit persistence= wins
   bool file = persistence == 1 || (persistence == -1 && persistenceDirSet);
   if ( !file )
-    return options;
+    return o;
 
   std::filesystem::path dir = std::filesystem::u8path(persistenceDir);
   if ( dir.empty() || dir.is_relative() )
@@ -87,25 +108,25 @@ rsmqtt::Options RsMqttConnection::clientOptions() const
   }
   std::error_code ec;
   std::filesystem::create_directories(dir, ec);  // paho reports a folder it cannot use
-  rsmqtt::Options o = options;
   o.set("persistenceDir", dir.lexically_normal().generic_u8string());
   return o;
 }
 
 //--------------------------------------------------------------------------------
 
-RsMqttConnection::RsMqttConnection(const std::string &n) : name(n), options(defaultOptions(n)) {}
+RsMqttConnection::RsMqttConnection(const std::string &n)
+  : name(n), options(defaultOptions(n)), clientId(defaultClientId(n)) {}
+
+std::string RsMqttConnection::defaultClientId(const std::string &n)
+{
+  return "WCCOArsmqtt_" + std::to_string((int) Resources::getManNum()) + "_" + n;
+}
 
 rsmqtt::Options RsMqttConnection::defaultOptions(const std::string &n)
 {
   // Defaults suitable for a driver; every one can be overridden.
-  CharString clientId("WCCOArsmqtt_");
-  clientId += CharString((int) Resources::getManNum());
-  clientId += "_";
-  clientId += n.c_str();
-
   rsmqtt::Options o;
-  o.set("clientId", (const char *) clientId)
+  o.set("clientId", defaultClientId(n))
    .set("automaticReconnect", true)
    .set("minRetryInterval", 1)
    .set("maxRetryInterval", 30)
@@ -129,6 +150,8 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
 
     rsmqtt::Options o = defaultOptions(name);
     autoReconnect = true;  // driver default, see defaultOptions()
+    clientId = defaultClientId(name);
+    reduClientId = false;
     persistence = -1;
     persistenceDirSet = false;
     persistenceDir.clear();
@@ -140,7 +163,7 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
         list += (list.empty() ? "" : " ") + u;
       o.set("serverURIs", list);
     }
-    if ( !cfg.clientId.empty() )   o.set("clientId", cfg.clientId);
+    if ( !cfg.clientId.empty() )   { o.set("clientId", cfg.clientId); clientId = cfg.clientId; }
     if ( cfg.mqttVersion != 0 )    o.set("MQTTVersion", cfg.mqttVersion);
     if ( cfg.keepAlive > 0 )       o.set("keepAliveInterval", cfg.keepAlive);
     o.set("cleansession", cfg.cleanSession);
@@ -170,6 +193,8 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
        .set("will.qos", cfg.willQoS)
        .set("will.retained", cfg.willRetain);
     }
+    // redu.<option> entries last: on the second redundant host they win
+    std::vector<std::pair<std::string, std::string>> redu;
     for (const auto &opt : cfg.options)
     {
       if ( opt.empty() ) continue;
@@ -179,7 +204,12 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
         err = "Config.Options entry '" + opt + "' is not 'name=value'";
         return false;
       }
-      std::string optName = opt.substr(0, eq), value = opt.substr(eq + 1);
+      std::string optName = opt.substr(0, eq), value = opt.substr(eq + 1), reduName;
+      if ( RsMqttRedu::splitReduOption(trimmed(optName), reduName) )
+      {
+        redu.emplace_back(trimmed(reduName), value);
+        continue;
+      }
       if ( isSecretOption(optName) && !RsMqttSecret::reveal(value, value, err) )
       {
         err = "Config.Options '" + optName + "': " + err;
@@ -188,6 +218,29 @@ bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::str
       o.set(optName, value);
       noteOption(optName, value);
     }
+    // applyReduOption works on `options`; the previous ones come back on failure
+    rsmqtt::Options previous = options;
+    options = o;
+    for (auto &r : redu)
+    {
+      if ( RsMqttRedu::isHost2() && isSecretOption(r.first) && !RsMqttSecret::reveal(r.second, r.second, err) )
+      {
+        options = previous;
+        err = "Config.Options 'redu." + r.first + "': " + err;
+        return false;
+      }
+      try
+      {
+        applyReduOption(r.first, r.second);
+      }
+      catch (const rsmqtt::Error &)
+      {
+        options = previous;
+        throw;
+      }
+    }
+    o = options;
+    options = previous;
 
     if ( cfg.subscribeQoS < 0 || cfg.subscribeQoS > 2 || cfg.publishQoS < 0 || cfg.publishQoS > 2 )
     {
@@ -322,6 +375,13 @@ void RsMqttConnections::setBrokerList(const std::vector<std::string> &names)
       logError(ErrClass::PRIO_WARNING, "setBrokerList", "invalid broker name '" + n + "'");
       continue;
     }
+    // in a redundant system "<x>_2" names the second host's twin of "<x>"
+    if ( RsMqttRedu::isRedundant() && RsMqttRedu::endsWithSuffix(n) )
+    {
+      logError(ErrClass::PRIO_WARNING, "setBrokerList",
+               "broker name '" + n + "' ends with \"_2\", which is reserved for the second redundant host; ignored");
+      continue;
+    }
     wanted.insert(n);
   }
 
@@ -401,6 +461,7 @@ bool RsMqttConnections::addAddress(const std::string &fullAddress, const RsMqttA
   sub.flags |= addr.subFlags;
   sub.matching = addr.needsMatching();
   sub.addresses[fullAddress]++;
+  sub.planDirty = true;
   if ( sub.matching )
     conn->matchingFilters.insert(addr.topic);
 
@@ -440,6 +501,7 @@ bool RsMqttConnections::removeAddress(const std::string &fullAddress, const RsMq
   auto a = s->second.addresses.find(fullAddress);
   if ( a != s->second.addresses.end() && --a->second == 0 )
     s->second.addresses.erase(a);
+  s->second.planDirty = true;
   if ( s->second.addresses.empty() )
   {
     conn->matchingFilters.erase(addr.topic);

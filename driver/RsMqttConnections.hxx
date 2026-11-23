@@ -33,6 +33,8 @@ class RsMqttConnection
 
     /// The driver's default options for a connection of this name.
     static rsmqtt::Options defaultOptions(const std::string &name);
+    /// "WCCOArsmqtt_<num>_<name>"
+    static std::string defaultClientId(const std::string &name);
 
     // ----- configuration
     std::string     name;
@@ -42,6 +44,8 @@ class RsMqttConnection
     int             publishQoS = 1;   // default QoS of output addresses
     bool            publishRetain = false;
     std::chrono::milliseconds reconnectInterval{10000};  // retry of failed connects
+    std::string     clientId;         // as configured; host 2 connects with "<clientId>_2"
+    bool            reduClientId = false;  // redu.clientId given: host 2 uses it as it is
     int             persistence = -1; // explicit persistence=: -1 not set, 0 none/memory, 1 file
     bool            persistenceDirSet = false;
     std::string     persistenceDir;
@@ -61,8 +65,13 @@ class RsMqttConnection
     void noteOption(const std::string &name, const std::string &value);
 
     /// `options` as the client gets them: file persistence goes to
-    /// <project>/data/rsmqtt, or to a relative persistenceDir under <project>/data.
+    /// <project>/data/rsmqtt, or to a relative persistenceDir under <project>/data;
+    /// on the second redundant host the client id gets "_2".
     rsmqtt::Options clientOptions() const;
+
+    /// A "redu.<option>" entry: on the second redundant host it sets <option>,
+    /// on host 1 it is only checked. Throws rsmqtt::Error for an unknown option.
+    void applyReduOption(const std::string &option, const std::string &value);
 
     /// Options whose value may be encrypted with _DriverSecurity.PublicKey (see RsMqttSecret.hxx).
     static bool isSecretOption(const std::string &name);
@@ -93,6 +102,22 @@ class RsMqttConnection
       int  flags = 0;
       bool matching = false;                // wildcard / shared filter
       std::map<std::string, int> addresses; // full address -> reference count
+
+      /// How a message is handed to the addresses: built from `addresses`
+      /// when they change (planDirty), so that a message needs no address
+      /// lookups and one pass over its JSON for all json= / ts= paths.
+      struct Delivery
+      {
+        std::string address;
+        bool json = false;
+        bool dyn = false;
+        int  valueId = -1;  // extractor result of json=<path>
+        int  tsId = -1;     // extractor result of ts=<path>
+        std::string jsonPath, tsPath;  // for messages
+      };
+      std::vector<Delivery> plan;
+      RsMqttJson::Extractor extractor;
+      bool planDirty = true;
     };
 
     std::map<std::string, Subscription> subscriptions;   // filter -> subscription

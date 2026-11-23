@@ -2,8 +2,11 @@
 #include "RsMqttConnections.hxx"
 #include "RsMqttTrans.hxx"
 
+#include <DpElement.hxx>
+#include <DynVar.hxx>
 #include <ErrHdl.hxx>
 #include <HWObject.hxx>
+#include <Manager.hxx>
 #include <PVSSMacros.hxx>
 
 #include <string>
@@ -12,6 +15,16 @@ static void addrError(const CharString &text)
 {
   ErrHdl::error(ErrClass::PRIO_SEVERE, ErrClass::ERR_PARAM, ErrClass::UNEXPECTEDSTATE,
                 "RsMqttHWMapper", "addDpPa", text);
+}
+
+// dyn_string, dyn_int, dyn_float, ... DPEs get a dyn transformation
+static bool isDynElement(const DpIdentifier &dpId)
+{
+  DpElementType et;
+  if ( !Manager::getElementType(dpId, et) )
+    return false;
+  VariableType vt = DpElement::getVariableType(et);
+  return vt != NOTYPE_VAR && DynVar::getItemType(vt) != NOTYPE_VAR;
 }
 
 static bool isInput(const PeriphAddr *confPtr)
@@ -32,7 +45,13 @@ PVSSboolean RsMqttHWMapper::addDpPa(DpIdentifier &dpId, PeriphAddr *confPtr)
               CharString((int) confPtr->getTransformationType()) + " (use 1000..1008)");
     return TreeHWMapper::addDpPa(dpId, confPtr, HWMapDpPa::TransformationError);
   }
-  confPtr->setTransform(new RsMqttTrans(confPtr->getTransformationType()));
+  bool dyn = isDynElement(dpId);
+  if ( dyn && !RsMqttTrans::isSupportedDyn(confPtr->getTransformationType()) )
+  {
+    addrError(CharString("address '") + name.c_str() + "': a dyn element needs data type 1001..1007 (no blob)");
+    return TreeHWMapper::addDpPa(dpId, confPtr, HWMapDpPa::TransformationError);
+  }
+  confPtr->setTransform(new RsMqttTrans(confPtr->getTransformationType(), dyn));
 
   RsMqttAddress addr;
   std::string err;
@@ -41,6 +60,16 @@ PVSSboolean RsMqttHWMapper::addDpPa(DpIdentifier &dpId, PeriphAddr *confPtr)
     addrError(CharString("address '") + name.c_str() + "': " + err.c_str());
     return TreeHWMapper::addDpPa(dpId, confPtr, HWMapDpPa::AddressError);
   }
+  addr.dyn = dyn;
+  // DPEs with the same address string share its HW object and JSON handling
+  if ( const RsMqttAddress *existing = RsMqttConnections::instance().parsed(name) )
+    if ( existing->dyn != dyn )
+    {
+      ErrHdl::error(ErrClass::PRIO_WARNING, ErrClass::ERR_PARAM, ErrClass::UNEXPECTEDSTATE, "RsMqttHWMapper", "addDpPa",
+                    CharString("address '") + name.c_str() + "' is used by dyn and non-dyn elements; "
+                    "JSON is handled as for the first one - give them different addresses");
+      addr.dyn = existing->dyn;
+    }
 
   // The connection may not be configured yet (broker DPs arrive later);
   // addAddress() then creates a placeholder.

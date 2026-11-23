@@ -47,6 +47,8 @@ set_target_properties(rsmqtt PROPERTIES
 
 set(SOURCES
   RsMqttAddress.cxx
+  RsMqttJson.cxx
+  RsMqttRedu.cxx
   RsMqttBrokerDp.cxx
   RsMqttConnections.cxx
   RsMqttDrv.cxx

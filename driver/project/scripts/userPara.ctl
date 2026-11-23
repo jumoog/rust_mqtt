@@ -110,11 +110,13 @@ upWritePanelAllAddressAttributes(string dpe, int Id, anytype dpc)
   {
     case "rsmqtt":
     {
-      string broker, topic, extra;
+      string broker, topic, extra, jsonPath, tsPath;
       int    qos, retain, mode = dpc[3], dir, datatype = dpc[7];
-      bool   lowlevel;
+      bool   lowlevel, json;
 
       rsmqttParseReference(dpc[1], broker, topic, qos, retain, extra);
+      json = rsmqttTakeOption(extra, "json", jsonPath);
+      rsmqttTakeOption(extra, "ts", tsPath);
 
       // mode: +64 = low level comparison
       if ( mode >= 64 ) { mode -= 64; lowlevel = TRUE; }
@@ -140,6 +142,9 @@ upWritePanelAllAddressAttributes(string dpe, int Id, anytype dpc)
                     "cmbBroker",  "text",        broker,
                     "txtTopic",   "text",        topic,
                     "txtOptions", "text",        extra,
+                    "chkJson",    "state", 0,    json,
+                    "txtJsonPath", "text",       jsonPath,
+                    "txtTsPath",  "text",        tsPath,
                     "cmbQos",     "selectedPos", qos + 2,      // -1 -> 1 (default)
                     "cmbRetain",  "selectedPos", retain + 2,   // -1 -> 1 (default)
                     "trans_art",  "selectedPos", datatype - 1000,
@@ -168,13 +173,16 @@ upReadPanelAllAddressAttributes(string dpe, int Id, dyn_anytype &dpc, bool &read
   {
     case "rsmqtt":
     {
-      string broker, topic, extra;
+      string broker, topic, extra, jsonPath, tsPath, ignored;
       int    qosPos, retainPos, typePos, dir, driver, mode;
-      bool   active, lowlevel;
+      bool   active, lowlevel, json;
 
       getMultiValue("cmbBroker",  "text",        broker,
                     "txtTopic",   "text",        topic,
                     "txtOptions", "text",        extra,
+                    "chkJson",    "state", 0,    json,
+                    "txtJsonPath", "text",       jsonPath,
+                    "txtTsPath",  "text",        tsPath,
                     "cmbQos",     "selectedPos", qosPos,
                     "cmbRetain",  "selectedPos", retainPos,
                     "trans_art",  "selectedPos", typePos,
@@ -185,6 +193,12 @@ upReadPanelAllAddressAttributes(string dpe, int Id, dyn_anytype &dpc, bool &read
 
       broker = strltrim(strrtrim(broker));
       extra  = strltrim(strrtrim(extra), ";");
+      jsonPath = strltrim(strrtrim(jsonPath));
+      tsPath   = strltrim(strrtrim(tsPath));
+      // json / ts typed into "More options" count like the fields
+      string v;
+      if ( rsmqttTakeOption(extra, "json", v) ) { json = TRUE; if ( jsonPath == "" ) jsonPath = v; }
+      if ( rsmqttTakeOption(extra, "ts", v) && tsPath == "" ) tsPath = v;
 
       // PARA also reads the panel right after a new address config was
       // opened; nothing entered yet is not an error at that point.
@@ -201,6 +215,12 @@ upReadPanelAllAddressAttributes(string dpe, int Id, dyn_anytype &dpc, bool &read
         err = "An output cannot publish to a topic filter or to $state.";
       else if ( strpos(topic, ";") >= 0 )
         err = "The topic must not contain ';'.";
+      else if ( strpos(jsonPath, ";") >= 0 || strpos(tsPath, ";") >= 0 )
+        err = "JSON paths must not contain ';'.";
+      else if ( (jsonPath != "" || tsPath != "") && !json )
+        err = "A JSON or timestamp path needs \"JSON payload\" checked (or clear the path).";
+      else if ( json && tsPath != "" && jsonPath == "" )
+        err = "With a timestamp path the value needs a JSON path too.";
 
       if ( err != "" )
       {
@@ -220,7 +240,7 @@ upReadPanelAllAddressAttributes(string dpe, int Id, dyn_anytype &dpc, bool &read
       }
       if ( lowlevel && dir != 1 ) mode += 64;
 
-      dpc[1]  = untouched ? "" : rsmqttMakeReference(broker, topic, qosPos - 2, retainPos - 2, extra);
+      dpc[1]  = untouched ? "" : rsmqttMakeReference(broker, topic, qosPos - 2, retainPos - 2, extra, json, jsonPath, tsPath);
       dpc[2]  = 0;
       dpc[3]  = mode;
       dpc[7]  = (typePos < 1 ? 1 : typePos) + 1000;

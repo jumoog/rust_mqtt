@@ -1,0 +1,24 @@
+# ==============================================================================
+# config.redu - rsmqtt MQTT driver (WCCOArsmqtt) in a redundant project
+# ==============================================================================
+# WinCC OA reads this file in redundant projects in addition to the config.redu
+# of the installation. If the project already has a config.redu, add these
+# lines to it.
+#
+# Host 1 uses _RsMqttDriver_<num> and _RsMqtt_<broker>, host 2 the "_2" twins
+# (_RsMqttDriver_<num>_2, _RsMqtt_<broker>_2). Panels and scripts write the
+# configuration to the host-1 DPs; the event manager copies it to the twins
+# (copyDpType). What each driver reports is forwarded to the other system
+# (fwdDpType). rsmqttUpgradeToRedundant() creates missing twins.
+# ==============================================================================
+
+[event]
+copyDpType = "_RsMqttDriver.Brokers"
+fwdDpType  = "_RsMqttDriver.Version"
+
+copyDpType = "_RsMqttBroker.Config"
+copyDpType = "_RsMqttBroker.Command"
+fwdDpType  = "_RsMqttBroker.State"
+
+# copyDpType skips DPs whose name ends with "_2": driver number 2
+copyDp = "_RsMqttDriver_2.Brokers" "_RsMqttDriver_2_2"

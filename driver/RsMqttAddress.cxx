@@ -177,9 +177,61 @@ bool RsMqttAddress::parse(std::string_view text, RsMqttAddress &out, std::string
       }
       out.subFlags = (out.subFlags & ~0x30) | ((val[0] - '0') << 4);
     }
+    else if ( ieq(name, "json") )
+    {
+      std::string perr;
+      if ( !RsMqttJson::parsePath(val, out.jsonPath, perr) )
+      {
+        err = perr;
+        return false;
+      }
+      out.json = true;
+    }
+    else if ( ieq(name, "ts") )
+    {
+      std::string perr;
+      if ( val.empty() )
+      {
+        err = "ts needs a JSON path, e.g. ts=time";
+        return false;
+      }
+      if ( !RsMqttJson::parsePath(val, out.tsPath, perr) )
+      {
+        err = "ts: " + perr;
+        return false;
+      }
+      if ( out.tsPath.empty() )
+      {
+        err = "ts needs a JSON path below the top level, e.g. ts=time";
+        return false;
+      }
+      out.hasTs = true;
+    }
     else
     {
       err = "unknown address option '" + std::string(name) + "'";
+      return false;
+    }
+  }
+
+  if ( out.hasTs && !out.json )
+  {
+    err = "ts needs the json option";
+    return false;
+  }
+  if ( out.json && out.isState )
+  {
+    err = "$state has no JSON payload";
+    return false;
+  }
+  if ( out.hasTs )
+  {
+    // the published object must hold both: neither path may contain the other
+    std::string berr, ignored;
+    std::vector<std::pair<const RsMqttJson::Path *, std::string>> m = {{&out.jsonPath, "0"}, {&out.tsPath, "0"}};
+    if ( !RsMqttJson::build(m, ignored, berr) )
+    {
+      err = "json and ts paths collide";
       return false;
     }
   }

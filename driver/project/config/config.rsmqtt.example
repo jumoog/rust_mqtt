@@ -62,6 +62,11 @@ ssl.verify = 1
 # (persistenceDir = "<folder>" sets another one; a relative folder is under <project>/data)
 persistence = "file"
 
+# redundant project: host 2 connects with "<clientId>_2"; redu.<option> lines
+# apply to host 2 only, e.g. a second broker or an own client id:
+# redu.serverURI = "tcp://broker-b.example.com:1883"
+# redu.clientId = "scada-b"
+
 # ---------------------------------------------------------------- WebSocket via proxy
 connection = "ws"
 serverURI = "wss://mqtt.example.com/mqtt"

@@ -359,19 +359,33 @@ def address_panel():
     # row 3
     p.label("lblDirection", 20, 180, 120, "Richtung", "Direction", "Режим")
     p.label("lblOptions", 230, 180, 160, "Weitere Optionen", "More options")
+    # row 4: JSON
+    p.label("lblJsonPath", 230, 258, 130, "JSON-Pfad", "JSON path")
+    p.label("lblTsPath", 364, 258, 130, "Zeitstempel-Pfad", "Timestamp path")
     # hints
-    p.label("lblHint1", 20, 270, 580,
+    p.label("lblHint1", 20, 318, 580,
             "Eingang: Topic darf + und # enthalten, $share/<Gruppe>/... für Shared Subscriptions.",
             "Input: the topic may contain + and #, $share/<group>/... for shared subscriptions.",
             bold=False)
-    p.label("lblHint2", 20, 288, 580,
+    p.label("lblHint2", 20, 336, 580,
             "Topic $state = Verbindungszustand (1/0).  Optionen: nolocal; rap; rh=0|1|2",
             "Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2",
             bold=False)
-    p.label("lblBrokerState", 20, 320, 580, "", bold=False)
+    p.label("lblHint3", 20, 354, 580,
+            "JSON-Pfad z.B. data.temp, values[0], ['a.b']; leer = ganze Nutzdaten.",
+            "JSON path e.g. data.temp, values[0], ['a.b']; empty = whole payload.",
+            bold=False)
+    p.label("lblHint4", 20, 372, 580,
+            "Zeitstempel: ISO 8601 oder Sekunden/ms seit 1970.  dyn-Elemente: JSON-Array.",
+            "Timestamp: ISO 8601 or seconds/ms since 1970.  dyn elements: JSON array.",
+            bold=False)
+    p.label("lblBrokerState", 20, 398, 580, "", bold=False)
 
     p.textfield("txtTopic", 228, 63, 492, 89)
     p.textfield("txtOptions", 228, 198, 492, 224, length=255)
+    p.checkbox("chkJson", 18, 276, 222, 302, "JSON-Nutzdaten", "JSON payload")
+    p.textfield("txtJsonPath", 228, 276, 358, 302, length=255)
+    p.textfield("txtTsPath", 362, 276, 492, 302, length=255)
 
     p.combobox("trans_art", 18, 128, 222, 154, [
         ("Text (String)", "Text (string)"),

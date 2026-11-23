@@ -24,6 +24,7 @@ const string FREEZE   = "C:/Repos/rust_mqtt/target/netutil.freeze"; // netutil f
 
 dyn_string gResults;
 dyn_string gBrokers;   // created in this run, deleted by cleanup()
+bool gKeep;            // group "<name>:keep": json / dyn leave their DPs, addresses and broker in place
 
 //------------------------------------------------------------------ helpers
 
@@ -140,7 +141,7 @@ string waitError(string name, float maxSec)
 int stateOf(string s) { return (int) substr(s, 0, strpos(s, "|")); }
 string errOf(string s) { return substr(s, strpos(s, "|") + 1); }
 
-void setAddr(string dpe, string ref, int direction)
+void setAddr(string dpe, string ref, int direction, int datatype = 1001)
 {
   int mode = direction == 2 ? DPATTR_ADDR_MODE_OUTPUT_SINGLE : DPATTR_ADDR_MODE_INPUT_SPONT;
   dpSetWait(dpe + ":_distrib.._type", DPCONFIG_DISTRIBUTION_INFO, dpe + ":_distrib.._driver", DRV);
@@ -148,7 +149,7 @@ void setAddr(string dpe, string ref, int direction)
             dpe + ":_address.._drv_ident", "RSMQTT",
             dpe + ":_address.._reference", ref,
             dpe + ":_address.._mode", mode,
-            dpe + ":_address.._datatype", 1001,
+            dpe + ":_address.._datatype", datatype,
             dpe + ":_address.._active", TRUE);
 }
 
@@ -509,8 +510,268 @@ void persist_check()
     rmdir(PERSIST_STORE + dirs[i], true);
 }
 
+/** A command line argument for docker (Windows quoting): "..." with quotes
+    escaped and the backslashes in front of a quote doubled. */
+string winArg(string s)
+{
+  string out = "\"";
+  int slashes = 0;
+  for (int i = 0; i < strlen(s); i++)
+  {
+    string c = substr(s, i, 1);
+    if ( c == "\\" ) { slashes++; continue; }
+    for (int k = 0; k < (c == "\"" ? 2 * slashes + 1 : slashes); k++) out += "\\";
+    slashes = 0;
+    out += c;
+  }
+  for (int k = 0; k < 2 * slashes; k++) out += "\\";
+  return out + "\"";
+}
+
+/** UTC text of a time, e.g. 2026-01-02T03:04:05.678Z */
+string utc(time t)
+{
+  string ms;
+  sprintf(ms, "%03d", milliSecond(t));
+  return formatTimeUTC("%Y-%m-%dT%H:%M:%S", t) + "." + ms + "Z";
+}
+
+void ensureJsonDp()
+{
+  if ( dynlen(dpTypes("RsMqttJsonT")) == 0 )
+  {
+    dyn_string el = makeDynString("temp", "hum", "arr", "name", "obj", "on", "tsIso", "tsNum", "root", "bad",
+                                  "outF", "outS", "outB");
+    dyn_int    ty = makeDynInt(DPEL_FLOAT, DPEL_FLOAT, DPEL_INT, DPEL_STRING, DPEL_STRING, DPEL_BOOL, DPEL_FLOAT, DPEL_FLOAT,
+                               DPEL_FLOAT, DPEL_FLOAT, DPEL_FLOAT, DPEL_STRING, DPEL_BOOL);
+    dyn_dyn_string n; dyn_dyn_int t;
+    n[1] = makeDynString("RsMqttJsonT", ""); t[1] = makeDynInt(DPEL_STRUCT);
+    for (int i = 1; i <= dynlen(el); i++) { n[i + 1] = makeDynString("", el[i]); t[i + 1] = makeDynInt(0, ty[i]); }
+    dpTypeCreate(n, t);
+  }
+  if ( !dpExists("RsMqttJson1") )
+    dpCreate("RsMqttJson1", "RsMqttJsonT");
+}
+
+/** Starts a subscriber in the broker container that writes one message to /tmp/<file>. */
+void subOne(string topic, string fileName)
+{
+  sh("docker exec -d " + BROKER_CONTAINER + " sh -c \"mosquitto_sub -p 1883 -t " + topic + " -C 1 -W 10 > /tmp/" + fileName + "\"");
+}
+
+/** json=<path> / ts=<path> in both directions. */
+void json()
+{
+  ensureJsonDp();
+  string d = "RsMqttJson1.";
+  string base = "opt/" + rnd(3) + "/json";
+  broker("o_json", makeMapping("ServerURI", "tcp://localhost:18840"));
+  waitState("o_json", 3, 8);
+
+  // inputs: several DPEs on one topic, each with its own path
+  dyn_string els = makeDynString("temp", "hum", "arr", "name", "obj", "on", "tsIso", "tsNum", "root", "bad");
+  for (int i = 1; i <= dynlen(els); i++)
+    dpSetWait(d + els[i], els[i] == "name" || els[i] == "obj" ? "" : 0);
+  setAddr(d + "temp",  "o_json:" + base + "/a;json=data.temp", 1, 1006);
+  setAddr(d + "hum",   "o_json:" + base + "/a;json=$.data.hum", 1, 1006);
+  setAddr(d + "arr",   "o_json:" + base + "/a;json=data.list[1]", 1, 1002);
+  setAddr(d + "name",  "o_json:" + base + "/a;json=data['name']", 1, 1001);
+  setAddr(d + "obj",   "o_json:" + base + "/a;json=data.obj", 1, 1001);
+  setAddr(d + "on",    "o_json:" + base + "/a;json=data.on", 1, 1007);
+  setAddr(d + "tsIso", "o_json:" + base + "/a;json=data.temp;ts=data.time", 1, 1006);
+  setAddr(d + "tsNum", "o_json:" + base + "/b;json=v;ts=t", 1, 1006);
+  setAddr(d + "root",  "o_json:" + base + "/c;json", 1, 1006);
+  setAddr(d + "bad",   "o_json:" + base + "/d;json=x", 1, 1006);
+  delay(1);
+
+  // source times after the reset above: WinCC OA does not let a value's time go back
+  // behind the time of the current value
+  delay(2);
+  time tA = getCurrentTime() - 1, tB = getCurrentTime() - 0.5;
+  string isoA = utc(tA);
+  long msB = (long) period(tB) * 1000 + milliSecond(tB);
+  mosqPub("-t " + base + "/a -m " + winArg("{\"data\": {\"temp\": 21.5, \"hum\": 40, \"list\": [10, 20, 30], " +
+          "\"name\": \"Pump \\u00e9\", \"obj\": {\"a\": [1, 2]}, \"on\": true, \"time\": \"" + isoA + "\"}}"));
+  mosqPub("-t " + base + "/b -m " + winArg("{\"v\": 7.25, \"t\": " + msB + "}"));
+  mosqPub("-t " + base + "/c -m 42.5");
+  mosqPub("-t " + base + "/d -m not-json");
+  delay(1);
+
+  float temp, hum, tsIso, tsNum, root, bad; int arr; string name, obj; bool on; time tIso, tNum;
+  dpGet(d + "temp", temp, d + "hum", hum, d + "arr", arr, d + "name", name, d + "obj", obj, d + "on", on,
+        d + "tsIso", tsIso, d + "tsIso:_original.._stime", tIso, d + "tsNum", tsNum, d + "tsNum:_original.._stime", tNum,
+        d + "root", root, d + "bad", bad);
+  result("json=data.temp (float)", temp == 21.5, "" + temp);
+  result("json=$.data.hum, same message", hum == 40, "" + hum);
+  result("json=data.list[1] (array element, int)", arr == 20, "" + arr);
+  result("json=data['name'] (string with \\u escape)", name == "Pump é", "'" + name + "'");
+  result("json=data.obj (object as text)", obj == "{\"a\": [1, 2]}", obj);
+  result("json=data.on (bool)", on, "" + on);
+  result("ts=data.time (ISO 8601) sets the source time", tsIso == 21.5 && utc(tIso) == isoA, utc(tIso) + " (sent " + isoA + ")");
+  result("ts=t (epoch ms) sets the source time", tsNum == 7.25 && utc(tNum) == utc(tB), tsNum + " " + utc(tNum) + " (sent " + utc(tB) + ")");
+  result("json without path (whole payload)", root == 42.5, "" + root);
+  result("payload not JSON: no update", bad == 0, "" + bad);
+  mosqPub("-t " + base + "/d -m " + winArg("{\"x\": 7}"));
+  delay(1);
+  dpGet(d + "bad", bad);
+  result("  ... next JSON payload is taken again", bad == 7, "" + bad);
+
+  // outputs
+  setAddr(d + "outF", "o_json:" + base + "/of;json=data.value;ts=data.time", 2, 1006);
+  setAddr(d + "outS", "o_json:" + base + "/os;json=msg", 2, 1001);
+  setAddr(d + "outB", "o_json:" + base + "/ob;json=values[1]", 2, 1007);
+  delay(1);
+  subOne(base + "/of", "of.txt"); subOne(base + "/os", "os.txt"); subOne(base + "/ob", "ob.txt");
+  delay(1);
+  dpSetWait(d + "outF", 12.5, d + "outS", "say \"hi\" a\\b", d + "outB", TRUE);
+  delay(1);
+  time tOut; dpGet(d + "outF:_original.._stime", tOut);
+  string of = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/of.txt");
+  string os = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/os.txt");
+  string ob = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/ob.txt");
+  result("output json=data.value;ts=data.time", of == "{\"data\":{\"value\":12.5,\"time\":\"" + utc(tOut) + "\"}}", of);
+  result("output json=msg (string escaped)", os == "{\"msg\":\"say \\\"hi\\\" a\\\\b\"}", os);
+  result("output json=values[1] (bool)", ob == "{\"values\":[null,true]}", ob);
+
+  if ( gKeep ) return;
+  for (int i = 1; i <= dynlen(els); i++) dpSetWait(d + els[i] + ":_address.._type", 0, d + els[i] + ":_distrib.._type", 0);
+  dyn_string outs = makeDynString("outF", "outS", "outB");
+  for (int i = 1; i <= dynlen(outs); i++) dpSetWait(d + outs[i] + ":_address.._type", 0, d + outs[i] + ":_distrib.._type", 0);
+  cleanup();
+}
+
+/** TRUE if two dyn values have the same items. */
+bool sameItems(anytype a, anytype b)
+{
+  if ( dynlen(a) != dynlen(b) ) return FALSE;
+  for (int i = 1; i <= dynlen(a); i++)
+    if ( a[i] != b[i] ) return FALSE;
+  return TRUE;
+}
+
+string items(anytype v)
+{
+  string s;
+  for (int i = 1; i <= dynlen(v); i++) s += (i > 1 ? " ; " : "") + v[i];
+  return "{" + s + "}";
+}
+
+void ensureDynDp()
+{
+  if ( dynlen(dpTypes("RsMqttDynT")) == 0 )
+  {
+    dyn_string el = makeDynString("dF", "dI", "dL", "dS", "dB", "dOne", "dOneS", "dJ", "dJs", "dEmpty", "dBad",
+                                  "outF", "outS", "outJ", "outE");
+    dyn_int    ty = makeDynInt(DPEL_DYN_FLOAT, DPEL_DYN_INT, DPEL_DYN_LONG, DPEL_DYN_STRING, DPEL_DYN_BOOL, DPEL_DYN_FLOAT,
+                               DPEL_DYN_STRING, DPEL_DYN_FLOAT, DPEL_DYN_STRING, DPEL_DYN_FLOAT, DPEL_DYN_INT,
+                               DPEL_DYN_FLOAT, DPEL_DYN_STRING, DPEL_DYN_INT, DPEL_DYN_INT);
+    dyn_dyn_string n; dyn_dyn_int t;
+    n[1] = makeDynString("RsMqttDynT", ""); t[1] = makeDynInt(DPEL_STRUCT);
+    for (int i = 1; i <= dynlen(el); i++) { n[i + 1] = makeDynString("", el[i]); t[i + 1] = makeDynInt(0, ty[i]); }
+    dpTypeCreate(n, t);
+  }
+  if ( !dpExists("RsMqttDyn1") )
+    dpCreate("RsMqttDyn1", "RsMqttDynT");
+}
+
+/** dyn DPEs: JSON arrays or single values in, JSON arrays out. */
+void dynTypes()
+{
+  ensureDynDp();
+  string d = "RsMqttDyn1.";
+  string base = "opt/" + rnd(3) + "/dyn";
+  broker("o_dyn", makeMapping("ServerURI", "tcp://localhost:18840"));
+  waitState("o_dyn", 3, 8);
+
+  dpSetWait(d + "dEmpty", makeDynFloat(9), d + "dBad", makeDynInt(5));
+  setAddr(d + "dF",     "o_dyn:" + base + "/f", 1, 1006);
+  setAddr(d + "dI",     "o_dyn:" + base + "/i", 1, 1002);
+  setAddr(d + "dL",     "o_dyn:" + base + "/l", 1, 1004);
+  setAddr(d + "dS",     "o_dyn:" + base + "/s", 1, 1001);
+  setAddr(d + "dB",     "o_dyn:" + base + "/b", 1, 1007);
+  setAddr(d + "dOne",   "o_dyn:" + base + "/one", 1, 1006);
+  setAddr(d + "dOneS",  "o_dyn:" + base + "/ones", 1, 1001);
+  setAddr(d + "dJ",     "o_dyn:" + base + "/j;json=data.values", 1, 1006);
+  setAddr(d + "dJs",    "o_dyn:" + base + "/j;json=data.name", 1, 1001);
+  setAddr(d + "dEmpty", "o_dyn:" + base + "/e", 1, 1006);
+  setAddr(d + "dBad",   "o_dyn:" + base + "/bad", 1, 1002);
+  delay(1);
+
+  mosqPub("-t " + base + "/f -m " + winArg("[1.5, 2, -3e2]"));
+  mosqPub("-t " + base + "/i -m " + winArg("[1, \"2\", 3.0]"));
+  mosqPub("-t " + base + "/l -m " + winArg("[9007199254740993, -1]"));
+  mosqPub("-t " + base + "/s -m " + winArg("[\"a\", \"b\\\"c\", 1, {\"x\": 1}]"));
+  mosqPub("-t " + base + "/b -m " + winArg("[true, false, 1]"));
+  mosqPub("-t " + base + "/one -m 42.5");
+  mosqPub("-t " + base + "/ones -m hello");
+  mosqPub("-t " + base + "/j -m " + winArg("{\"data\": {\"values\": [1, 2, 3], \"name\": \"[x]\"}}"));
+  mosqPub("-t " + base + "/e -m " + winArg("[]"));
+  mosqPub("-t " + base + "/bad -m " + winArg("[1, \"x\"]"));
+  delay(1);
+
+  dyn_float dF, dOne, dJ, dEmpty; dyn_int dI, dBad; dyn_long dL; dyn_string dS, dOneS, dJs; dyn_bool dB;
+  dpGet(d + "dF", dF, d + "dI", dI, d + "dL", dL, d + "dS", dS, d + "dB", dB, d + "dOne", dOne, d + "dOneS", dOneS,
+        d + "dJ", dJ, d + "dJs", dJs, d + "dEmpty", dEmpty, d + "dBad", dBad);
+  result("dyn_float from a JSON array", sameItems(dF, makeDynFloat(1.5, 2, -300)), items(dF));
+  result("dyn_int, items as numbers and strings", sameItems(dI, makeDynInt(1, 2, 3)), items(dI));
+  dyn_long expL; expL[1] = (long) "9007199254740993"; expL[2] = -1;  // no 64 bit literals in CTRL
+  result("dyn_long (int64 beyond double precision)", sameItems(dL, expL), items(dL));
+  result("dyn_string, escapes / number / object as text", sameItems(dS, makeDynString("a", "b\"c", "1", "{\"x\": 1}")), items(dS));
+  result("dyn_bool", sameItems(dB, makeDynBool(TRUE, FALSE, TRUE)), items(dB));
+  result("single JSON value -> one item", sameItems(dOne, makeDynFloat(42.5)), items(dOne));
+  result("single non-JSON value -> one item", sameItems(dOneS, makeDynString("hello")), items(dOneS));
+  result("json=data.values (array at a path)", sameItems(dJ, makeDynFloat(1, 2, 3)), items(dJ));
+  result("json=data.name: a string stays one item", sameItems(dJs, makeDynString("[x]")), items(dJs));
+  result("[] -> no items", dynlen(dEmpty) == 0, items(dEmpty));
+  result("bad item: no update", sameItems(dBad, makeDynInt(5)), items(dBad));
+
+  setAddr(d + "outF", "o_dyn:" + base + "/of", 2, 1006);
+  setAddr(d + "outS", "o_dyn:" + base + "/os", 2, 1001);
+  setAddr(d + "outJ", "o_dyn:" + base + "/oj;json=data.v", 2, 1002);
+  setAddr(d + "outE", "o_dyn:" + base + "/oe", 2, 1002);
+  delay(1);
+  subOne(base + "/of", "dof.txt"); subOne(base + "/os", "dos.txt"); subOne(base + "/oj", "doj.txt"); subOne(base + "/oe", "doe.txt");
+  delay(1);
+  dyn_int none;
+  dpSetWait(d + "outF", makeDynFloat(1.5, 2, -300), d + "outS", makeDynString("a", "b\"c"),
+            d + "outJ", makeDynInt(1, 2, 3), d + "outE", none);
+  delay(1);
+  string of = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/dof.txt");
+  string os = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/dos.txt");
+  string oj = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/doj.txt");
+  string oe = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/doe.txt");
+  result("output dyn_float -> JSON array", of == "[1.5,2,-300]", of);
+  result("output dyn_string -> JSON array of strings", os == "[\"a\",\"b\\\"c\"]", os);
+  result("output dyn_int with json=data.v", oj == "{\"data\":{\"v\":[1,2,3]}}", oj);
+  result("output empty dyn -> []", oe == "[]", oe);
+
+  dyn_string all = makeDynString("dF", "dI", "dL", "dS", "dB", "dOne", "dOneS", "dJ", "dJs", "dEmpty", "dBad",
+                                 "outF", "outS", "outJ", "outE");
+  if ( gKeep ) return;
+  for (int i = 1; i <= dynlen(all); i++) dpSetWait(d + all[i] + ":_address.._type", 0, d + all[i] + ":_distrib.._type", 0);
+  cleanup();
+}
+
+/** Redundancy on host 1 (this project): redu.* options are checked but not applied. */
+void redu()
+{
+  broker("o_redu", makeMapping("ServerURI", "tcp://localhost:18840", "ClientId", "",
+         "Options", makeDynString("redu.clientId=opt-host2", "redu.serverURI=tcp://localhost:1", "redu.keepAliveInterval=5")));
+  string s = waitState("o_redu", 3, 8);
+  string cid, uri;
+  dpGet("_RsMqtt_o_redu.State.ClientId", cid, "_RsMqtt_o_redu.State.ServerURI", uri);
+  result("host 1 ignores redu.clientId / redu.serverURI", stateOf(s) == 3 && cid == "WCCOArsmqtt_" + DRV + "_o_redu" && uri == "tcp://localhost:18840",
+         "ConnState " + s + ", client id " + cid + ", " + uri);
+  broker("o_redu_bad", makeMapping("ServerURI", "tcp://localhost:18840", "Options", makeDynString("redu.noSuchOption=1")));
+  string e = waitError("o_redu_bad", 8);
+  result("unknown redu.* option is a configuration error", stateOf(e) == 4 && strpos(errOf(e), "redu.noSuchOption") >= 0, "ConnState " + e);
+  cleanup();
+}
+
 dyn_string main(string group)
 {
+  gKeep = strpos(group, ":keep") > 0;
+  strreplace(group, ":keep", "");
   ensureTestDp();
   switch ( group )
   {
@@ -520,7 +781,10 @@ dyn_string main(string group)
     case "ws":            ws(); break;
     case "connect":       connect(); break;
     case "v5":            v5(); break;
-    case "session":       session(); break;    case "buffer":        buffer(); break;
+    case "session":       session(); break;
+    case "json":          json(); break;
+    case "dyn":           dynTypes(); break;
+    case "redu":          redu(); break;    case "buffer":        buffer(); break;
     case "will_arm":      will_arm(); break;
     case "will_check":    will_check(); break;
     case "persist_arm":   persist_arm(); break;

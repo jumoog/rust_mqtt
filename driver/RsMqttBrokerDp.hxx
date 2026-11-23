@@ -5,6 +5,9 @@
 //   Version   string      [out] library version
 //
 // DPT _RsMqttBroker (one DP per broker, name "_RsMqtt_<broker>")
+//
+// Redundancy: on host 2 both DPs carry "_2" (_RsMqttDriver_3_2,
+// _RsMqtt_<broker>_2), see RsMqttRedu.hxx.
 //   Config.*   [in]  connection settings, see rsmqtt_types.asc
 //   Command.Reconnect   [in]  TRUE: drop and re-open the connection
 //   State.*    [out] ConnState, LastError, ServerURI, ClientId, MessagesIn/Out
@@ -122,7 +125,8 @@ class RsMqttBrokerIntDp : public DrvIntDp
     };
 
     /// DP name of a broker
-    static CharString dpNameOf(const std::string &broker) { return CharString("_RsMqtt_") + broker.c_str(); }
+    /// "_RsMqtt_<broker>", on the second redundant host "_RsMqtt_<broker>_2"
+    static CharString dpNameOf(const std::string &broker);
 
     explicit RsMqttBrokerIntDp(const std::string &broker);
 
