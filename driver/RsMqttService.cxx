@@ -293,6 +293,12 @@ vrpc::Status RsMqttService::publish(std::shared_ptr<vrpc::ServerContext>, const 
 void RsMqttService::receive(std::shared_ptr<vrpc::ServerContext> ctx, const Variable *req,
                             std::shared_ptr<vrpc::FunctionResponseSender> sender)
 {
+  // canceled before it got here (e.g. its deadline passed on the way): no need to hold it
+  if ( ctx->isCanceled() )
+  {
+    sender->sendErrorResponse(vrpc::StatusCode::Canceled, "Receive was canceled");
+    return;
+  }
   Subscription *sub = find(req);
   if ( !sub )
   {
