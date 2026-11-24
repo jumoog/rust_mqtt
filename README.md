@@ -385,7 +385,7 @@ anytype res; evalScript(res, src, makeDynString(), "tls"); return res;
 | `dyn` | dyn_float / int / long / string / bool from JSON arrays and single values, `[]`, bad items, arrays at a JSON path, JSON array output; dyn_blob as base64 arrays and strings (also at a JSON path), raw payloads and output |
 | `json` | `json=` paths (nested, array, quoted name, whole payload), string escapes, objects as text, `ts=` as ISO 8601 and epoch ms, non-JSON payloads, JSON output with timestamp |
 | `payload` | plain string (1 to `maxPayload` characters) and blob outputs of many sizes published intact, a string above `maxPayload` refused |
-| `merge` | `merge` outputs: three DPEs in one `dpSet` give one document, a single change publishes the whole document again |
+| `merge` | `merge` outputs: three DPEs in one `dpSet` give one document, a single change publishes the whole document again, `maxPayload` applies to the document (75 KB refused, 30 KB published) |
 | `session` | clean session / clean start with and without session expiry |
 | `buffer` | keep alive detects a hung broker, automatic reconnect, `maxBufferedMessages` + `deleteOldestMessages` |
 | `will_arm`, `will_check` | will with retain, QoS 1 and v5 properties; kill `WCCOArsmqtt` between the two |

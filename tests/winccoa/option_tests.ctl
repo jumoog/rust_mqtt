@@ -795,6 +795,33 @@ void merge()
          second + " (DPE time " + utc(t1) + ")");
   result("merge: no further messages", dynlen(got) == 2, dynlen(got) + " messages");
 
+  // maxPayload (default 64 KB) applies to the whole document
+  string big = "o_merge:" + topic + "/big";
+  setAddr(d + "name", big + ";json=a;merge", 2, 1001);
+  setAddr(d + "obj",  big + ";json=b;merge", 2, 1001);
+  setAddr(d + "outS", big + ";json=c;merge", 2, 1001);
+  dynAppend(outs, makeDynString("name", "obj"));
+  delay(1);
+  string s25k, s10k;
+  for (int i = 0; i < 2500; i++) s25k += "0123456789";
+  for (int i = 0; i < 1000; i++) s10k += "0123456789";
+  // 3 x 25 KB: each value fits, the document does not
+  sh("docker exec -d " + BROKER_CONTAINER + " sh -c \"mosquitto_sub -p 1883 -t " + topic + "/big -C 1 -W 3 > /tmp/merge_big.txt\"");
+  delay(1);
+  dpSetWait(d + "name", s25k, d + "obj", s25k, d + "outS", s25k);
+  delay(3);
+  string bigGot = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/merge_big.txt");
+  result("merge: 75 KB document above maxPayload is not published", bigGot == "", strlen(bigGot) + " bytes received");
+  // 3 x 10 KB: published whole
+  sh("docker exec -d " + BROKER_CONTAINER + " sh -c \"mosquitto_sub -p 1883 -t " + topic + "/big -C 1 -W 3 > /tmp/merge_mid.txt\"");
+  delay(1);
+  dpSetWait(d + "name", s10k, d + "obj", s10k, d + "outS", s10k);
+  delay(3);
+  string midGot = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/merge_mid.txt");
+  string midWant = "{\"a\":\"" + s10k + "\",\"b\":\"" + s10k + "\",\"c\":\"" + s10k + "\"}";
+  result("merge: 30 KB document is published whole", midGot == midWant,
+         strlen(midGot) + " bytes received (want " + strlen(midWant) + ")");
+
   for (int i = 1; i <= dynlen(outs); i++) dpSetWait(d + outs[i] + ":_address.._type", 0, d + outs[i] + ":_distrib.._type", 0);
   cleanup();
 }
