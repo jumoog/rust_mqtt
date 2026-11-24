@@ -7,7 +7,9 @@
 //!
 //! pub: publishes `rounds` x `topics` messages; `{i}` in the topic is the
 //!      topic number (1-based). The payload is the round number as text, so
-//!      after the run every topic's last value is `rounds - 1`.
+//!      after the run every topic's last value is `rounds - 1`; --payload
+//!      gives a template instead (`{r}` the round, `{i}` the topic number),
+//!      e.g. '{"data":{"v":{r}}}', or `@file` to read it from a file.
 //!      --rate limits the messages per second (0 = as fast as possible).
 //! sub: subscribes and counts until --expect messages arrived or nothing
 //!      came for --timeout seconds; exit code 0 if the expectation was met.
@@ -31,6 +33,7 @@ struct Args {
     expect: usize,
     timeout: u64,
     retain: bool,
+    payload: String,
 }
 
 fn parse() -> Args {
@@ -46,6 +49,7 @@ fn parse() -> Args {
         expect: 0,
         timeout: 10,
         retain: false,
+        payload: "{r}".into(),
     };
     let mut it = std::env::args().skip(1);
     a.mode = it.next().unwrap_or_default();
@@ -62,6 +66,13 @@ fn parse() -> Args {
             "--expect" => a.expect = v().parse().unwrap_or_else(|_| usage("--expect")),
             "--timeout" => a.timeout = v().parse().unwrap_or_else(|_| usage("--timeout")),
             "--retain" => a.retain = true,
+            "--payload" => {
+                let t = v();
+                a.payload = match t.strip_prefix('@') {
+                    Some(f) => std::fs::read_to_string(f).unwrap_or_else(|e| fail(&format!("{f}: {e}"))),
+                    None => t,
+                };
+            }
             _ => usage(&format!("unknown argument {k}")),
         }
     }
@@ -72,7 +83,7 @@ fn parse() -> Args {
 }
 
 fn usage(err: &str) -> ! {
-    eprintln!("error: {err}\nusage: stress pub|sub [--uri U] [--topic T] [--topics N] [--rounds N] [--qos Q] [--rate R] [--retain] [--filter F] [--expect N] [--timeout S]");
+    eprintln!("error: {err}\nusage: stress pub|sub [--uri U] [--topic T] [--topics N] [--rounds N] [--qos Q] [--rate R] [--retain] [--payload TEMPLATE|@FILE] [--filter F] [--expect N] [--timeout S]");
     std::process::exit(2)
 }
 
@@ -115,9 +126,12 @@ fn run_pub(a: &Args) {
     let q = qos(a.qos);
     let start = Instant::now();
     let mut sent = 0usize;
+    let per_topic = a.payload.contains("{i}");
     for round in 0..a.rounds {
-        let payload = round.to_string();
-        for t in &topics {
+        let base = a.payload.replace("{r}", &round.to_string());
+        for (k, t) in topics.iter().enumerate() {
+            let payload: std::borrow::Cow<str> =
+                if per_topic { base.replace("{i}", &(k + 1).to_string()).into() } else { base.as_str().into() };
             c.publish(t, payload.as_bytes(), q, a.retain, None).unwrap_or_else(|e| fail(&e.message));
             sent += 1;
             if a.rate > 0.0 {

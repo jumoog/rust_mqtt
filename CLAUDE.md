@@ -22,6 +22,7 @@ Windows (MSVC Rust target, VS with C++, CMake, WinCC OA 3.21 API). Use PowerShel
 cargo build --release -p rsmqtt-wincc          # both crates (driver CMake also runs this)
 cargo test -p rsmqtt-wincc                      # driver logic, no broker needed
 cargo test -p rsmqtt-wincc sparkplug::tests::host   # a single test
+cargo run --release -p rsmqtt-wincc --example json_bench --features bench-sonic   # JSON extractor vs sonic-rs
 cargo clippy -p rsmqtt -p rsmqtt-wincc --all-targets -- -D warnings
 $env:API_ROOT = "C:\Program Files\Siemens\WinCC_OA\3.21\api"
 cmake -S driver -B driver/build -G "Visual Studio 18 2026" -A x64

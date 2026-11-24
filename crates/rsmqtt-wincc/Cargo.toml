@@ -16,6 +16,18 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 rsmqtt = { path = "../rsmqtt" }
+# UTF-8 validation of the non-ASCII parts of JSON strings (SIMD)
+simdutf8 = "0.1"
 # Sparkplug B protobuf types (sparkplug_b.proto, generated with prost); no MQTT
 # client or async runtime (the srad host framework itself is not used)
 srad-types = "0.4"
+# only for the json_bench example (feature bench-sonic)
+sonic-rs = { version = "0.5.12", optional = true }
+
+[features]
+# json_bench compares the JSON extractor with sonic-rs
+bench-sonic = ["dep:sonic-rs"]
+
+[[example]]
+name = "json_bench"
+required-features = ["bench-sonic"]

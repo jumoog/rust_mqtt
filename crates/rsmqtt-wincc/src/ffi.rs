@@ -59,10 +59,6 @@ fn cstring(s: &str) -> CString {
     CString::new(s.replace('\0', " ")).unwrap_or_default()
 }
 
-fn owned_cstring(s: String) -> CString {
-    CString::new(s).unwrap_or_else(|e| cstring(&String::from_utf8_lossy(&e.into_vec())))
-}
-
 //------------------------------------------------------------------------ buffers
 
 /// An owned byte buffer (not NUL-terminated); free with rsmqtt_wincc_buf_free.
@@ -913,46 +909,53 @@ pub struct RsmqttWinccPublish {
 
 pub struct RsmqttWinccRouter {
     r: router::Router,
-    deliveries: Vec<(CString, router::Delivery)>,
-    publish: Vec<(CString, router::Publish)>,
-    subscribe: Vec<(CString, c_int)>,
-    warnings: Vec<(CString, bool)>,
+    /// the results of the last call, reused (no allocations per message)
+    out: router::Outcome,
+    /// C strings of the (rare) publish topics, subscriptions and warnings
+    publish: Vec<CString>,
+    subscribe: Vec<CString>,
+    warnings: Vec<CString>,
 }
 
 impl RsmqttWinccRouter {
-    fn keep(&mut self, o: router::Outcome) {
-        // the strings move into the CStrings (no copies: one message may have many deliveries)
-        self.deliveries = o.deliveries.into_iter().map(|mut d| (owned_cstring(std::mem::take(&mut d.address)), d)).collect();
-        self.publish = o.publish.into_iter().map(|mut p| (owned_cstring(std::mem::take(&mut p.topic)), p)).collect();
-        self.subscribe = o.subscribe.into_iter().map(|(t, q)| (owned_cstring(t), q)).collect();
-        self.warnings = o.warnings.into_iter().map(|w| (owned_cstring(w.text), w.sparkplug)).collect();
+    fn keep(&mut self) {
+        let o = &self.out;
+        self.publish.extend(o.publish.iter().map(|p| cstring(&p.topic)));
+        self.subscribe.extend(o.subscribe.iter().map(|(t, _)| cstring(t)));
+        self.warnings.extend(o.warnings.iter().map(|w| cstring(&w.text)));
     }
 
     /// Before each call: a call that fails (panic) must not leave the
     /// results of the previous one to be applied again.
     fn forget(&mut self) {
-        self.deliveries.clear();
+        self.out.clear();
         self.publish.clear();
         self.subscribe.clear();
         self.warnings.clear();
     }
 }
 
-unsafe fn router_call<F: FnOnce(&mut router::Router) -> router::Outcome>(r: *mut RsmqttWinccRouter, f: F) {
-    guard((), || {
+unsafe fn router_call<F: FnOnce(&mut router::Router, &mut router::Outcome)>(r: *mut RsmqttWinccRouter, f: F) {
+    let done = guard(false, || {
         let r = r.as_mut().ok_or("null router")?;
         r.forget();
-        let o = f(&mut r.r);
-        r.keep(o);
-        Ok(())
-    })
+        f(&mut r.r, &mut r.out);
+        r.keep();
+        Ok(true)
+    });
+    // a call that failed half way (panic) leaves nothing to apply
+    if !done {
+        if let Some(r) = r.as_mut() {
+            r.forget();
+        }
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn rsmqtt_wincc_router_new() -> *mut RsmqttWinccRouter {
     Box::into_raw(Box::new(RsmqttWinccRouter {
         r: router::Router::new(),
-        deliveries: vec![],
+        out: router::Outcome::default(),
         publish: vec![],
         subscribe: vec![],
         warnings: vec![],
@@ -1064,43 +1067,43 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_message(
     state_ts: i64,
 ) {
     let (t, h) = (text(topic), text(state_host));
-    router_call(r, |r| r.message(&t, bytes(payload, len), now_ms, &h, state_ts))
+    router_call(r, |r, out| r.message_into(&t, bytes(payload, len), now_ms, &h, state_ts, out))
 }
 
 /// The values of the $state addresses.
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_state(r: *mut RsmqttWinccRouter, connected: c_int) {
-    router_call(r, |r| r.state(connected != 0))
+    router_call(r, |r, out| r.state_into(connected != 0, out))
 }
 
 /// The connection is established (Sparkplug STATE, edge nodes offline until their birth).
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_connected(r: *mut RsmqttWinccRouter, state_host: *const c_char, state_ts: i64) {
     let h = text(state_host);
-    router_call(r, |r| r.connected(&h, state_ts))
+    router_call(r, |r, out| r.connected_into(&h, state_ts, out))
 }
 
 /// The connection is gone: Sparkplug edge nodes offline, metrics stale.
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_connection_lost(r: *mut RsmqttWinccRouter) {
-    router_call(r, |r| r.connection_lost())
+    router_call(r, |r, out| r.connection_lost_into(out))
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_delivery_count(r: *const RsmqttWinccRouter) -> usize {
-    r.as_ref().map_or(0, |r| r.deliveries.len())
+    r.as_ref().map_or(0, |r| r.out.deliveries.len())
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_delivery_get(r: *const RsmqttWinccRouter, i: usize, out: *mut RsmqttWinccDelivery) -> c_int {
     let (Some(r), Some(out)) = (r.as_ref(), out.as_mut()) else { return -1 };
-    let Some((a, d)) = r.deliveries.get(i) else { return -1 };
-    let (has_value, value, value_len) = match &d.value {
+    let Some(d) = r.out.deliveries.get(i) else { return -1 };
+    let (has_value, value, value_len) = match r.out.value(d) {
         Some(v) => (1, v.as_ptr() as *const c_char, v.len()),
         None => (0, c"".as_ptr(), 0),
     };
     *out = RsmqttWinccDelivery {
-        address: a.as_ptr(),
+        address: d.address.as_ptr(),
         has_value,
         value,
         value_len,
@@ -1120,7 +1123,7 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_publish_count(r: *const RsmqttWincc
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_publish_get(r: *const RsmqttWinccRouter, i: usize, out: *mut RsmqttWinccPublish) -> c_int {
     let (Some(r), Some(out)) = (r.as_ref(), out.as_mut()) else { return -1 };
-    let Some((t, p)) = r.publish.get(i) else { return -1 };
+    let (Some(t), Some(p)) = (r.publish.get(i), r.out.publish.get(i)) else { return -1 };
     *out = RsmqttWinccPublish {
         topic: t.as_ptr(),
         payload: p.payload.as_ptr() as *const c_char,
@@ -1143,7 +1146,8 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_subscribe_get(
     filter: *mut *const c_char,
     qos: *mut c_int,
 ) -> c_int {
-    let Some((f, q)) = r.as_ref().and_then(|r| r.subscribe.get(i)) else { return -1 };
+    let Some(r) = r.as_ref() else { return -1 };
+    let (Some(f), Some((_, q))) = (r.subscribe.get(i), r.out.subscribe.get(i)) else { return -1 };
     if let Some(x) = filter.as_mut() {
         *x = f.as_ptr();
     }
@@ -1161,9 +1165,10 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_warning_count(r: *const RsmqttWincc
 /// Warning i ("" if out of range); `*sparkplug` = 1 for one of the Sparkplug host application.
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_warning_get(r: *const RsmqttWinccRouter, i: usize, sparkplug: *mut c_int) -> *const c_char {
-    let Some((w, s)) = r.as_ref().and_then(|r| r.warnings.get(i)) else { return c"".as_ptr() };
+    let Some(r) = r.as_ref() else { return c"".as_ptr() };
+    let (Some(w), Some(s)) = (r.warnings.get(i), r.out.warnings.get(i)) else { return c"".as_ptr() };
     if let Some(x) = sparkplug.as_mut() {
-        *x = *s as c_int;
+        *x = s.sparkplug as c_int;
     }
     w.as_ptr()
 }

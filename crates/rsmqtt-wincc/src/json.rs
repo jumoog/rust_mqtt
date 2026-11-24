@@ -62,6 +62,80 @@ fn append_utf8(out: &mut Vec<u8>, cp: u32) {
     out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
 }
 
+/// The part of a string that needs no escape: the number of bytes before the
+/// first '"', '\\' or control character (< 0x20), and whether they are all
+/// ASCII (then they are valid UTF-8 without a further check).
+#[inline]
+fn plain_scan(s: &[u8]) -> (usize, bool) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SSE2 is part of x86-64: 16 bytes per step
+        use std::arch::x86_64::*;
+        let mut i = 0;
+        let mut high = 0;
+        // SAFETY: SSE2 is always available on x86_64; every load reads 16
+        // bytes within `s` (i + 16 <= s.len()).
+        unsafe {
+            let quote = _mm_set1_epi8(b'"' as i8);
+            let backslash = _mm_set1_epi8(b'\\' as i8);
+            let upper3 = _mm_set1_epi8(0xE0u8 as i8);
+            let zero = _mm_setzero_si128();
+            while i + 16 <= s.len() {
+                let v = _mm_loadu_si128(s.as_ptr().add(i) as *const __m128i);
+                let control = _mm_cmpeq_epi8(_mm_and_si128(v, upper3), zero); // c < 0x20
+                let special = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(v, quote), _mm_cmpeq_epi8(v, backslash)), control);
+                let m = _mm_movemask_epi8(special);
+                let h = _mm_movemask_epi8(v); // bytes >= 0x80
+                if m != 0 {
+                    let k = m.trailing_zeros();
+                    high |= h & ((1 << k) - 1);
+                    return (i + k as usize, high == 0);
+                }
+                high |= h;
+                i += 16;
+            }
+        }
+        let (n, ascii) = plain_scan_bytes(&s[i..]);
+        (i + n, ascii && high == 0)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    plain_scan_bytes(s)
+}
+
+/// plain_scan() a byte at a time.
+#[inline]
+fn plain_scan_bytes(s: &[u8]) -> (usize, bool) {
+    let mut ascii = true;
+    for (k, &c) in s.iter().enumerate() {
+        if c < 0x20 || c == b'"' || c == b'\\' {
+            return (k, ascii);
+        }
+        ascii &= c < 0x80;
+    }
+    (s.len(), ascii)
+}
+
+/// Is a span from plain_scan() valid UTF-8 (simdutf8 when it is not ASCII)?
+#[inline]
+fn plain_utf8(span: &[u8], ascii: bool) -> bool {
+    ascii || simdutf8::basic::from_utf8(span).is_ok()
+}
+
+/// Appends text with invalid UTF-8 sequences replaced by U+FFFD (one per byte).
+fn push_lossy(out: &mut Vec<u8>, s: &[u8]) {
+    let mut i = 0;
+    while i < s.len() {
+        let n = utf8_len(s, i);
+        if n == 0 {
+            out.extend_from_slice("\u{FFFD}".as_bytes());
+            i += 1;
+        } else {
+            out.extend_from_slice(&s[i..i + n]);
+            i += n;
+        }
+    }
+}
+
 /// Length of the valid UTF-8 sequence at s[i], 0 if invalid.
 fn utf8_len(s: &[u8], i: usize) -> usize {
     let c = s[i];
@@ -157,14 +231,19 @@ impl<'a> Parser<'a> {
                 return self.fail("control character in string");
             }
             if c != b'\\' {
-                let n = utf8_len(self.s, self.i);
-                if n == 0 {
+                // text up to the next quote, backslash or control character:
+                // checked and copied in one go
+                let (n, ascii) = plain_scan(&self.s[self.i..]);
+                let span = &self.s[self.i..self.i + n];
+                if !plain_utf8(span, ascii) {
+                    // the offset of the first invalid sequence, as a char-wise check gives it
+                    self.i += std::str::from_utf8(span).map_or_else(|e| e.valid_up_to(), |_| span.len());
                     return self.fail("invalid UTF-8 in string");
                 }
                 if let Some(o) = out.as_deref_mut() {
-                    o.extend_from_slice(&self.s[self.i..self.i + n]);
+                    o.extend_from_slice(span);
                 }
-                self.i += n;
+                self.i += span.len();
                 continue;
             }
             self.i += 1;
@@ -625,23 +704,31 @@ pub fn parse_array(array: &[u8]) -> Result<Vec<Value>, String> {
 
 /// A JSON string literal; invalid UTF-8 becomes U+FFFD.
 pub fn quote(text: &[u8]) -> Vec<u8> {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = Vec::with_capacity(text.len() + 2);
+    quote_into(text, &mut out);
+    out
+}
+
+/// [`quote`] appended to `out`.
+pub fn quote_into(text: &[u8], out: &mut Vec<u8>) {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    out.reserve(text.len() + 2);
     out.push(b'"');
     let mut i = 0;
     while i < text.len() {
-        let c = text[i];
-        if c >= 0x80 {
-            let n = utf8_len(text, i);
-            if n == 0 {
-                out.extend_from_slice("\u{FFFD}".as_bytes());
-                i += 1;
+        // text that needs no escape: copied in one go when it is valid UTF-8
+        let (n, ascii) = plain_scan(&text[i..]);
+        if n > 0 {
+            let span = &text[i..i + n];
+            if plain_utf8(span, ascii) {
+                out.extend_from_slice(span);
             } else {
-                out.extend_from_slice(&text[i..i + n]);
-                i += n;
+                push_lossy(out, span);
             }
+            i += n;
             continue;
         }
+        let c = text[i];
         match c {
             b'"' => out.extend_from_slice(b"\\\""),
             b'\\' => out.extend_from_slice(b"\\\\"),
@@ -660,7 +747,6 @@ pub fn quote(text: &[u8]) -> Vec<u8> {
         i += 1;
     }
     out.push(b'"');
-    out
 }
 
 //------------------------------------------------------------------------ build
@@ -927,11 +1013,21 @@ pub struct ExResult {
 pub struct Extractor {
     nodes: Vec<ExNode>,
     count: usize,
+    /// buffers of run(), kept so that a run needs no allocations
+    scratch: Scratch,
+}
+
+#[derive(Clone, Default)]
+struct Scratch {
+    visited: Vec<bool>,
+    done: Vec<bool>,
+    /// the member name being looked up (needed only until the lookup)
+    name: Vec<u8>,
 }
 
 impl Default for Extractor {
     fn default() -> Self {
-        Extractor { nodes: vec![ExNode::default()], count: 0 }
+        Extractor { nodes: vec![ExNode::default()], count: 0, scratch: Scratch::default() }
     }
 }
 
@@ -939,8 +1035,9 @@ struct Walker<'a, 'b> {
     nodes: &'a [ExNode],
     results: &'b mut [ExResult],
     p: Parser<'a>,
-    visited: Vec<bool>,
-    done: Vec<bool>,
+    visited: &'b mut [bool],
+    done: &'b mut [bool],
+    name: &'b mut Vec<u8>,
     remaining: usize,
     open_targets: i32,
     stop: bool,
@@ -961,26 +1058,21 @@ impl<'a, 'b> Walker<'a, 'b> {
 
     /// Requested paths below node `ni` can no longer be found: Missing.
     fn missing_below(&mut self, ni: usize) {
-        let children: Vec<usize> = {
-            let n = &self.nodes[ni];
-            n.members.values().chain(n.elements.values()).copied().collect()
-        };
-        for c in children {
+        // the node table is borrowed apart from the walker (no copy of the children)
+        let nodes = self.nodes;
+        for &c in nodes[ni].members.values().chain(nodes[ni].elements.values()) {
             self.missing_below(c);
-            self.settle(self.nodes[c].id);
+            self.settle(nodes[c].id);
         }
     }
 
     /// The end of an object or array: what was not in it is missing.
     fn not_visited(&mut self, ni: usize) {
-        let children: Vec<usize> = {
-            let n = &self.nodes[ni];
-            n.members.values().chain(n.elements.values()).copied().collect()
-        };
-        for c in children {
+        let nodes = self.nodes;
+        for &c in nodes[ni].members.values().chain(nodes[ni].elements.values()) {
             if !self.visited[c] {
                 self.missing_below(c);
-                self.settle(self.nodes[c].id);
+                self.settle(nodes[c].id);
             }
         }
     }
@@ -1076,14 +1168,13 @@ impl<'a, 'b> Walker<'a, 'b> {
             self.not_visited(ni);
             return true;
         }
-        let mut name = Vec::new();
         loop {
             self.p.ws();
             if !self.p.at(b'"') {
                 return self.p.fail("expected member name");
             }
-            name.clear();
-            if !self.p.string(Some(&mut name)) {
+            self.name.clear();
+            if !self.p.string(Some(self.name)) {
                 return false;
             }
             self.p.ws();
@@ -1091,7 +1182,7 @@ impl<'a, 'b> Walker<'a, 'b> {
                 return self.p.fail("expected ':'");
             }
             self.p.i += 1;
-            let target = std::str::from_utf8(&name).ok().and_then(|n| self.nodes[ni].members.get(n).copied());
+            let target = std::str::from_utf8(self.name).ok().and_then(|n| self.nodes[ni].members.get(n).copied());
             if !self.child(target, depth + 1) {
                 return false;
             }
@@ -1180,7 +1271,9 @@ impl Extractor {
     }
 
     pub fn clear(&mut self) {
-        *self = Self::default();
+        self.nodes.clear();
+        self.nodes.push(ExNode::default());
+        self.count = 0;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -1193,7 +1286,7 @@ impl Extractor {
 
     /// results[id] for every added path; the error says what is wrong when
     /// a result is NotJson. `results` is reused to avoid allocations.
-    pub fn run(&self, doc: &[u8], results: &mut Vec<ExResult>) -> String {
+    pub fn run(&mut self, doc: &[u8], results: &mut Vec<ExResult>) -> String {
         results.resize_with(self.count, || ExResult { found: Found::Missing, value: Value::default() });
         for r in results.iter_mut() {
             r.found = Found::Missing;
@@ -1203,13 +1296,19 @@ impl Extractor {
         if self.count == 0 {
             return String::new();
         }
+        let Extractor { nodes, count, scratch } = self;
+        scratch.visited.clear();
+        scratch.visited.resize(nodes.len(), false);
+        scratch.done.clear();
+        scratch.done.resize(*count, false);
         let mut w = Walker {
-            nodes: &self.nodes,
+            nodes,
             results: &mut results[..],
             p: Parser::new(doc),
-            visited: vec![false; self.nodes.len()],
-            done: vec![false; self.count],
-            remaining: self.count,
+            visited: &mut scratch.visited,
+            done: &mut scratch.done,
+            name: &mut scratch.name,
+            remaining: *count,
             open_targets: 0,
             stop: false,
         };
@@ -1217,9 +1316,9 @@ impl Extractor {
         if !w.walk(0, 0) {
             // like get(): what was settled before the error stands, the rest is NotJson
             let err = std::mem::take(&mut w.p.err);
-            let done = std::mem::take(&mut w.done);
+            drop(w);
             for (k, r) in results.iter_mut().enumerate() {
-                if !done[k] {
+                if !scratch.done[k] {
                     r.found = Found::NotJson;
                 }
             }
@@ -1368,6 +1467,120 @@ mod tests {
         assert_eq!(d("\"[x]\"").unwrap(), vec![(b"[x]".to_vec(), true)]);
         assert!(d("").unwrap().is_empty() && d("[]").unwrap().is_empty() && d("null").unwrap().is_empty());
         assert!(d("[1, null]").is_err());
+    }
+
+    /// The byte-by-byte string scanner the fast path replaced: unescaped text,
+    /// or the error and its offset in the document.
+    fn reference_string(doc: &[u8]) -> Result<Vec<u8>, String> {
+        let mut p = Parser::new(doc);
+        let mut out = Vec::new();
+        p.i = 1;
+        while p.i < doc.len() {
+            let c = doc[p.i];
+            if c == b'"' {
+                return Ok(out);
+            }
+            if c < 0x20 {
+                p.fail("control character in string");
+                return Err(p.err);
+            }
+            assert_ne!(c, b'\\', "escapes are not part of this comparison");
+            let n = utf8_len(doc, p.i);
+            if n == 0 {
+                p.fail("invalid UTF-8 in string");
+                return Err(p.err);
+            }
+            out.extend_from_slice(&doc[p.i..p.i + n]);
+            p.i += n;
+        }
+        p.fail("unterminated string");
+        Err(p.err)
+    }
+
+    /// The byte-by-byte quote() the fast path replaced.
+    fn reference_quote(text: &[u8]) -> Vec<u8> {
+        let mut out = vec![b'"'];
+        let mut i = 0;
+        while i < text.len() {
+            let c = text[i];
+            if c >= 0x80 {
+                let n = utf8_len(text, i);
+                if n == 0 {
+                    out.extend_from_slice("\u{FFFD}".as_bytes());
+                    i += 1;
+                } else {
+                    out.extend_from_slice(&text[i..i + n]);
+                    i += n;
+                }
+                continue;
+            }
+            match c {
+                b'"' => out.extend_from_slice(b"\\\""),
+                b'\\' => out.extend_from_slice(b"\\\\"),
+                0x08 => out.extend_from_slice(b"\\b"),
+                0x0C => out.extend_from_slice(b"\\f"),
+                b'\n' => out.extend_from_slice(b"\\n"),
+                b'\r' => out.extend_from_slice(b"\\r"),
+                b'\t' => out.extend_from_slice(b"\\t"),
+                c if c < 0x20 => out.extend_from_slice(format!("\\u{:04x}", c).as_bytes()),
+                c => out.push(c),
+            }
+            i += 1;
+        }
+        out.push(b'"');
+        out
+    }
+
+    // the block-wise scanning gives what the byte-by-byte code gave
+    #[test]
+    fn fast_path_matches_byte_by_byte() {
+        let pieces: [&[u8]; 12] = [
+            b"plain ascii text ", b"\xc3\xa9", b"\xe2\x82\xac", b"\xf0\x9f\x98\x80", b"\xff", b"\xc3", b"\xed\xa0\x80",
+            b"\x01", b"\x7f", b"0123456789abcdefghijklmnopqrstuvwxyzABCDEF", b"\xe2\x82", b"\xc0\xaf",
+        ];
+        let mut seed = 0x2545F4914F6CDD1Du64;
+        let mut next = move |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        for _ in 0..20000 {
+            let mut text = Vec::new();
+            for _ in 0..next(12) {
+                // mostly long clean runs, sometimes one odd piece
+                let p = if next(4) == 0 { pieces[next(pieces.len())] } else { pieces[next(2) * 9] };
+                for _ in 0..1 + next(3) {
+                    text.extend_from_slice(p);
+                }
+            }
+            if next(5) == 0 {
+                text.push(b'"');
+                text.extend_from_slice(b"tail");
+            }
+            assert_eq!(quote(&text), reference_quote(&text), "quote of {text:?}");
+            for start in [0, text.len() / 3, text.len() / 2] {
+                assert_eq!(plain_scan(&text[start..]), plain_scan_bytes(&text[start..]), "scan of {text:?}");
+            }
+            let mut escaped = text.clone();
+            escaped.extend_from_slice(b"\\x\\");
+            escaped.extend_from_slice(&text);
+            assert_eq!(quote(&escaped), reference_quote(&escaped), "quote of {escaped:?}");
+
+            let mut doc = vec![b'"'];
+            doc.extend_from_slice(&text);
+            if next(4) != 0 {
+                doc.push(b'"');
+            }
+            let expected = reference_string(&doc);
+            let mut p = Parser::new(&doc);
+            let mut out = Vec::new();
+            let ok = p.string(Some(&mut out));
+            match expected {
+                Ok(v) => assert!(ok && out == v, "string of {doc:?}: {ok} {:?}", p.err),
+                Err(e) => assert!(!ok && p.err == e, "string of {doc:?}: got {:?}, expected {e:?}", p.err),
+            }
+        }
     }
 
     // the extractor gives what get() gives, for every path and every cut of every document

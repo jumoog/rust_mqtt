@@ -3,14 +3,21 @@
 //! The driver registers every address of a DPE ([`Router::add`] /
 //! [`Router::remove`]); the router keeps the subscriptions (filter, QoS,
 //! flags), the `$state` addresses and the Sparkplug B host application of
-//! the connection. A message ([`Router::message`]) or a change of the
-//! connection ([`Router::state`], [`Router::connected`],
-//! [`Router::connection_lost`]) gives an [`Outcome`]: the values for the
+//! the connection. A message ([`Router::message_into`]) or a change of the
+//! connection ([`Router::state_into`], [`Router::connected_into`],
+//! [`Router::connection_lost_into`]) gives an [`Outcome`]: the values for the
 //! addresses, messages to publish, filters to subscribe and warnings. The
 //! driver turns the values into HWObjects; the router never calls the
 //! driver.
+//!
+//! A message costs no allocations once the buffers have grown: the caller
+//! keeps one `Outcome` and passes it to every call, the values go into one
+//! byte buffer in it, and the addresses are C strings made once when they
+//! are registered and shared by the deliveries.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::ffi::{CStr, CString};
+use std::sync::Arc;
 
 use crate::address::{self, Address};
 use crate::{json, sparkplug};
@@ -29,20 +36,16 @@ pub enum Validity {
 /// A value for an address.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Delivery {
-    pub address: String,
-    /// None: the payload of the message as it is
-    pub value: Option<Vec<u8>>,
+    /// the full address (shared, NUL-terminated for the C ABI)
+    pub address: Arc<CStr>,
+    /// (offset, length) of the value in [`Outcome::data`]; None: the
+    /// payload of the message as it is (see [`Outcome::value`])
+    pub value: Option<(usize, usize)>,
     /// source time in ms since 1970; None: now
     pub time_ms: Option<i64>,
     /// the time is the value's own (ts= or Sparkplug), not the receive time
     pub periph_time: bool,
     pub validity: Validity,
-}
-
-impl Delivery {
-    fn text(address: &str, value: &[u8], validity: Validity) -> Self {
-        Delivery { address: address.to_string(), value: Some(value.to_vec()), time_ms: None, periph_time: false, validity }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -60,7 +63,8 @@ pub struct Warning {
     pub text: String,
 }
 
-/// What a message or a change of the connection leads to.
+/// What a message or a change of the connection leads to. Reuse one for
+/// all calls: every call clears it first and keeps the capacity.
 #[derive(Debug, Default)]
 pub struct Outcome {
     pub deliveries: Vec<Delivery>,
@@ -68,6 +72,40 @@ pub struct Outcome {
     /// (filter, QoS) to subscribe, apart from the address subscriptions
     pub subscribe: Vec<(String, i32)>,
     pub warnings: Vec<Warning>,
+    /// the values of the deliveries
+    pub data: Vec<u8>,
+}
+
+impl Outcome {
+    pub fn clear(&mut self) {
+        self.deliveries.clear();
+        self.publish.clear();
+        self.subscribe.clear();
+        self.warnings.clear();
+        self.data.clear();
+    }
+
+    /// The value of a delivery (None: the payload of the message).
+    pub fn value(&self, d: &Delivery) -> Option<&[u8]> {
+        d.value.map(|(at, n)| &self.data[at..at + n])
+    }
+
+    /// The message payload as it is.
+    fn payload(&mut self, address: &Arc<CStr>) {
+        self.deliveries.push(Delivery { address: address.clone(), value: None, time_ms: None, periph_time: false, validity: Validity::Keep });
+    }
+
+    /// A value written into `data` by `write`.
+    fn value_with(&mut self, address: &Arc<CStr>, time_ms: Option<i64>, validity: Validity, write: impl FnOnce(&mut Vec<u8>)) {
+        let at = self.data.len();
+        write(&mut self.data);
+        let value = Some((at, self.data.len() - at));
+        self.deliveries.push(Delivery { address: address.clone(), value, time_ms, periph_time: time_ms.is_some(), validity });
+    }
+
+    fn text(&mut self, address: &Arc<CStr>, text: &[u8], time_ms: Option<i64>, validity: Validity) {
+        self.value_with(address, time_ms, validity, |d| d.extend_from_slice(text));
+    }
 }
 
 /// A subscription: filter, QoS, RSMQTT_SUB_* flags.
@@ -90,13 +128,21 @@ pub enum Added {
 
 struct Entry {
     addr: Address,
+    /// the full address as a C string, shared by the deliveries
+    name: Arc<CStr>,
     dyn_: bool,
     refs: i32,
+}
+
+fn c_name(full: &str) -> Arc<CStr> {
+    let c = CString::new(full).unwrap_or_else(|_| CString::new(full.replace('\0', " ")).unwrap_or_default());
+    Arc::from(c.into_boxed_c_str())
 }
 
 /// How a message is handed to one address.
 struct Plan {
     address: String,
+    name: Arc<CStr>,
     json: Option<JsonPlan>,
 }
 
@@ -163,7 +209,10 @@ impl Router {
     /// subscribe QoS for addresses without qos=.
     pub fn add(&mut self, full: &str, dyn_: bool, input: bool, default_qos: i32) -> Result<Added, String> {
         let addr = address::parse(full)?;
-        let entry = self.addresses.entry(full.to_string()).or_insert(Entry { addr: Address::default(), dyn_, refs: 0 });
+        let entry = self
+            .addresses
+            .entry(full.to_string())
+            .or_insert_with(|| Entry { addr: Address::default(), name: c_name(full), dyn_, refs: 0 });
         entry.refs += 1;
         entry.addr = addr.clone();
         entry.dyn_ = dyn_;
@@ -273,15 +322,20 @@ impl Router {
     }
 
     /// The values of the `$state` addresses.
-    pub fn state(&self, connected: bool) -> Outcome {
+    pub fn state_into(&self, connected: bool, out: &mut Outcome) {
+        out.clear();
         let v: &[u8] = if connected { b"1" } else { b"0" };
-        Outcome { deliveries: self.state.keys().map(|a| Delivery::text(a, v, Validity::Keep)).collect(), ..Default::default() }
+        for a in self.state.keys() {
+            if let Some(e) = self.addresses.get(a) {
+                out.text(&e.name, v, None, Validity::Keep);
+            }
+        }
     }
 
     /// One message. `state_host` / `state_ts`: the Sparkplug host id this
     /// client publishes STATE for ("" for none) and its timestamp.
-    pub fn message(&mut self, topic: &str, payload: &[u8], now_ms: i64, state_host: &str, state_ts: i64) -> Outcome {
-        let mut out = Outcome::default();
+    pub fn message_into(&mut self, topic: &str, payload: &[u8], now_ms: i64, state_host: &str, state_ts: i64, out: &mut Outcome) {
+        out.clear();
 
         // our own STATE: another client (an earlier session's will) set it
         // offline; addresses on STATE topics still get the message below
@@ -297,34 +351,38 @@ impl Router {
             }
         }
 
+        let Router { addresses, subs, matching, spb, spb_index, spb_last, json_warned, .. } = self;
+
         // exact subscriptions
-        if self.subs.get(topic).is_some_and(|s| !s.matching) {
-            self.deliver_to(topic, payload, &mut out);
+        if let Some(sub) = subs.get_mut(topic).filter(|s| !s.matching) {
+            deliver_to(sub, addresses, json_warned, payload, out);
         }
 
         // wildcard and shared subscriptions
-        let matched: Vec<String> = self.matching.iter().filter(|f| address::topic_matches(f, topic)).cloned().collect();
         let mut sparkplug_done = false;
-        for f in matched {
-            if !sparkplug_done && self.subs.get(&f).is_some_and(|s| s.sparkplug_refs > 0) {
+        for f in matching.iter() {
+            if !address::topic_matches(f, topic) {
+                continue;
+            }
+            let Some(sub) = subs.get_mut(f) else { continue };
+            if !sparkplug_done && sub.sparkplug_refs > 0 {
                 sparkplug_done = true; // once per message
-                let o = self.spb.on_message(topic, payload, now_ms);
+                let o = spb.on_message(topic, payload, now_ms);
                 out.warnings.extend(o.warnings.into_iter().map(|text| Warning { sparkplug: true, text }));
                 // rebirth requests: QoS 0
                 out.publish.extend(o.publish.into_iter().map(|m| Publish { topic: m.topic, payload: m.payload, qos: 0, retain: false }));
-                self.apply(o.updates, &mut out);
+                apply(o.updates, spb_index, spb_last, addresses, out);
             }
             // other addresses on the filter (the plan skips Sparkplug ones)
-            self.deliver_to(&f, payload, &mut out);
+            deliver_to(sub, addresses, json_warned, payload, out);
         }
-        out
     }
 
     /// The connection is established: the STATE of the host application
     /// (subscription first, then the message, as Sparkplug 3.0 wants it),
     /// and edge nodes and devices count as offline until their birth.
-    pub fn connected(&self, state_host: &str, state_ts: i64) -> Outcome {
-        let mut out = Outcome::default();
+    pub fn connected_into(&self, state_host: &str, state_ts: i64, out: &mut Outcome) {
+        out.clear();
         if !state_host.is_empty() {
             let topic = sparkplug::state_topic(state_host);
             out.subscribe.push((topic.clone(), 1));
@@ -337,18 +395,48 @@ impl Router {
         }
         for ((group, node, device, metric), addrs) in &self.spb_index {
             if metric.is_none() && !self.spb.is_online(group, node, device) {
-                out.deliveries.extend(addrs.keys().map(|a| Delivery::text(a, b"0", Validity::Valid)));
+                for a in addrs.keys() {
+                    if let Some(e) = self.addresses.get(a) {
+                        out.text(&e.name, b"0", None, Validity::Valid);
+                    }
+                }
             }
         }
-        out
     }
 
     /// The connection is gone: every edge node and device goes offline, its
     /// metrics stale.
+    pub fn connection_lost_into(&mut self, out: &mut Outcome) {
+        out.clear();
+        let updates = self.spb.on_connection_lost().updates;
+        apply(updates, &self.spb_index, &mut self.spb_last, &self.addresses, out);
+    }
+
+    /// [`Router::state_into`] with a new Outcome.
+    pub fn state(&self, connected: bool) -> Outcome {
+        let mut out = Outcome::default();
+        self.state_into(connected, &mut out);
+        out
+    }
+
+    /// [`Router::message_into`] with a new Outcome.
+    pub fn message(&mut self, topic: &str, payload: &[u8], now_ms: i64, state_host: &str, state_ts: i64) -> Outcome {
+        let mut out = Outcome::default();
+        self.message_into(topic, payload, now_ms, state_host, state_ts, &mut out);
+        out
+    }
+
+    /// [`Router::connected_into`] with a new Outcome.
+    pub fn connected(&self, state_host: &str, state_ts: i64) -> Outcome {
+        let mut out = Outcome::default();
+        self.connected_into(state_host, state_ts, &mut out);
+        out
+    }
+
+    /// [`Router::connection_lost_into`] with a new Outcome.
     pub fn connection_lost(&mut self) -> Outcome {
         let mut out = Outcome::default();
-        let updates = self.spb.on_connection_lost().updates;
-        self.apply(updates, &mut out);
+        self.connection_lost_into(&mut out);
         out
     }
 
@@ -411,122 +499,117 @@ impl Router {
             retain: if a.retain >= 0 { a.retain != 0 } else { publish_retain },
         })
     }
+}
 
-    fn apply(&mut self, updates: Vec<sparkplug::Update>, out: &mut Outcome) {
-        use sparkplug::UpdateKind;
-        for u in updates {
-            let metric = if u.kind == UpdateKind::Online { None } else { Some(u.metric) };
-            let key = (u.group, u.node, u.device, metric);
-            let Some(addrs) = self.spb_index.get(&key) else { continue };
-            for a in addrs.keys() {
-                match u.kind {
-                    UpdateKind::Value => {
-                        // dyn: a string stays one item, even if it looks like an array
-                        let dyn_ = self.addresses.get(a).is_some_and(|e| e.dyn_);
-                        let text = if dyn_ && u.is_string { json::quote(&u.text) } else { u.text.clone() };
-                        out.deliveries.push(Delivery {
-                            address: a.clone(),
-                            value: Some(text.clone()),
-                            time_ms: u.time_ms,
-                            periph_time: u.time_ms.is_some(),
-                            validity: Validity::Valid,
-                        });
-                        self.spb_last.insert(a.clone(), text);
-                    }
-                    UpdateKind::Stale => {
-                        // the last value again, invalid (nothing to send before the first one)
-                        if let Some(last) = self.spb_last.get(a) {
-                            out.deliveries.push(Delivery::text(a, last, Validity::Invalid));
-                        }
-                    }
-                    UpdateKind::Online => {
-                        out.deliveries.push(Delivery::text(a, if u.online { b"1" } else { b"0" }, Validity::Valid));
+/// Sparkplug updates to the input addresses of their metrics / online state.
+fn apply(
+    updates: Vec<sparkplug::Update>,
+    spb_index: &BTreeMap<SpbKey, BTreeMap<String, i32>>,
+    spb_last: &mut HashMap<String, Vec<u8>>,
+    addresses: &BTreeMap<String, Entry>,
+    out: &mut Outcome,
+) {
+    use sparkplug::UpdateKind;
+    for u in updates {
+        let metric = if u.kind == UpdateKind::Online { None } else { Some(u.metric) };
+        let key = (u.group, u.node, u.device, metric);
+        let Some(addrs) = spb_index.get(&key) else { continue };
+        for a in addrs.keys() {
+            let Some(e) = addresses.get(a) else { continue };
+            match u.kind {
+                UpdateKind::Value => {
+                    // dyn: a string stays one item, even if it looks like an array
+                    let text = if e.dyn_ && u.is_string { json::quote(&u.text) } else { u.text.clone() };
+                    out.text(&e.name, &text, u.time_ms, Validity::Valid);
+                    spb_last.insert(a.clone(), text);
+                }
+                UpdateKind::Stale => {
+                    // the last value again, invalid (nothing to send before the first one)
+                    if let Some(last) = spb_last.get(a) {
+                        out.text(&e.name, last, None, Validity::Invalid);
                     }
                 }
+                UpdateKind::Online => out.text(&e.name, if u.online { b"1" } else { b"0" }, None, Validity::Valid),
             }
         }
     }
+}
 
-    /// The (non-Sparkplug) addresses of one subscription.
-    fn deliver_to(&mut self, filter: &str, payload: &[u8], out: &mut Outcome) {
-        let Router { subs, addresses, json_warned, .. } = self;
-        let Some(sub) = subs.get_mut(filter) else { return };
-        if sub.plan_dirty {
-            build_plan(sub, addresses);
-            // addresses changed: a new or changed configuration warns again
-            json_warned.clear();
+/// The (non-Sparkplug) addresses of one subscription.
+fn deliver_to(
+    sub: &mut Subscription,
+    addresses: &BTreeMap<String, Entry>,
+    json_warned: &mut HashSet<String>,
+    payload: &[u8],
+    out: &mut Outcome,
+) {
+    if sub.plan_dirty {
+        build_plan(sub, addresses);
+        // addresses changed: a new or changed configuration warns again
+        json_warned.clear();
+    }
+
+    // one pass over the payload for all paths of this subscription
+    let err = if sub.extractor.is_empty() { String::new() } else { sub.extractor.run(payload, &mut sub.results) };
+
+    for d in &sub.plan {
+        let Some(j) = &d.json else {
+            out.payload(&d.name);
+            continue;
+        };
+        let Some(r) = j.value.and_then(|id| sub.results.get(id)) else {
+            warn_once(json_warned, &d.address, || format!("invalid JSON path {}", j.path), out);
+            continue;
+        };
+        match r.found {
+            json::Found::Missing => {
+                warn_once(json_warned, &d.address, || format!("the JSON payload has no value at {}", j.path), out);
+                continue;
+            }
+            json::Found::NotJson => {
+                warn_once(json_warned, &d.address, || format!("the payload is not JSON: {err}"), out);
+                continue;
+            }
+            json::Found::Yes => {}
+        }
+        if r.value.kind == json::Kind::Null {
+            continue; // no value, nothing to update
         }
 
-        // one pass over the payload for all paths of this subscription
-        let err = if sub.extractor.is_empty() { String::new() } else { sub.extractor.run(payload, &mut sub.results) };
-
-        for d in &sub.plan {
-            let Some(j) = &d.json else {
-                out.deliveries.push(Delivery {
-                    address: d.address.clone(),
-                    value: None,
-                    time_ms: None,
-                    periph_time: false,
-                    validity: Validity::Keep,
-                });
-                continue;
-            };
-            let Some(r) = j.value.and_then(|id| sub.results.get(id)) else {
-                warn_once(json_warned, &d.address, format!("invalid JSON path {}", j.path), out);
-                continue;
-            };
-            match r.found {
-                json::Found::Missing => {
-                    warn_once(json_warned, &d.address, format!("the JSON payload has no value at {}", j.path), out);
-                    continue;
-                }
-                json::Found::NotJson => {
-                    warn_once(json_warned, &d.address, format!("the payload is not JSON: {err}"), out);
-                    continue;
-                }
-                json::Found::Yes => {}
+        let mut time_ms = None;
+        if let Some(ts) = j.ts {
+            let t = ts.and_then(|id| sub.results.get(id)).filter(|t| t.found == json::Found::Yes).and_then(|t| json::parse_time(&t.value));
+            match t {
+                Some(ms) => time_ms = Some(ms),
+                None => warn_once(json_warned, &d.address, || format!("no valid timestamp at {}, the current time is used", j.ts_path), out),
             }
-            if r.value.kind == json::Kind::Null {
-                continue; // no value, nothing to update
-            }
-            // dyn: the transformation reads a JSON array or one value; a string
-            // stays a JSON string so that its text is one item, even if it looks like an array
-            let value = if j.dyn_ && r.value.kind == json::Kind::String { json::quote(&r.value.text) } else { r.value.text.clone() };
-
-            let mut time_ms = None;
-            if let Some(ts) = j.ts {
-                let t = ts.and_then(|id| sub.results.get(id)).filter(|t| t.found == json::Found::Yes).and_then(|t| json::parse_time(&t.value));
-                match t {
-                    Some(ms) => time_ms = Some(ms),
-                    None => {
-                        warn_once(json_warned, &d.address, format!("no valid timestamp at {}, the current time is used", j.ts_path), out);
-                        out.deliveries.push(Delivery {
-                            address: d.address.clone(),
-                            value: Some(value),
-                            time_ms: None,
-                            periph_time: false,
-                            validity: Validity::Keep,
-                        });
-                        continue;
-                    }
-                }
-            }
-            json_warned.remove(&d.address);
-            out.deliveries.push(Delivery {
-                address: d.address.clone(),
-                value: Some(value),
-                time_ms,
-                periph_time: time_ms.is_some(),
-                validity: Validity::Keep,
-            });
         }
+        if time_ms.is_some() || j.ts.is_none() {
+            // fits: a later problem warns again
+            if !json_warned.is_empty() {
+                json_warned.remove(&d.address);
+            }
+        }
+        // dyn: the transformation reads a JSON array or one value; a string
+        // stays a JSON string so that its text is one item, even if it looks like an array
+        let quote = j.dyn_ && r.value.kind == json::Kind::String;
+        out.value_with(&d.name, time_ms, Validity::Keep, |data| {
+            if quote {
+                json::quote_into(&r.value.text, data)
+            } else {
+                data.extend_from_slice(&r.value.text)
+            }
+        });
     }
 }
 
 /// A JSON problem of an address, once until a payload fits again: a topic
 /// may carry many messages.
-fn warn_once(warned: &mut HashSet<String>, address: &str, text: String, out: &mut Outcome) {
-    if warned.insert(address.to_string()) {
+/// The text is only made when the warning is new.
+fn warn_once(warned: &mut HashSet<String>, address: &str, text: impl FnOnce() -> String, out: &mut Outcome) {
+    if !warned.contains(address) {
+        warned.insert(address.to_string());
+        let text = text();
         out.warnings.push(Warning { sparkplug: false, text: format!("address '{address}': {text} (logged once until it works again)") });
     }
 }
@@ -539,11 +622,11 @@ fn build_plan(sub: &mut Subscription, addresses: &BTreeMap<String, Entry>) {
         Err(_) => (None, path.to_string()),
     };
     for a in sub.addresses.keys() {
-        let e = addresses.get(a);
-        if e.is_some_and(|e| e.addr.sparkplug) {
+        let Some(e) = addresses.get(a) else { continue };
+        if e.addr.sparkplug {
             continue; // decoded by the Sparkplug host application
         }
-        let json = e.filter(|e| e.addr.json).map(|e| {
+        let json = e.addr.json.then(|| {
             let (value, path) = add(&e.addr.json_path, &mut sub.extractor);
             let (ts, ts_path) = if e.addr.has_ts {
                 let (id, p) = add(&e.addr.ts_path, &mut sub.extractor);
@@ -553,7 +636,7 @@ fn build_plan(sub: &mut Subscription, addresses: &BTreeMap<String, Entry>) {
             };
             JsonPlan { dyn_: e.dyn_, value, ts, path, ts_path }
         });
-        sub.plan.push(Plan { address: a.clone(), json });
+        sub.plan.push(Plan { address: a.clone(), name: e.name.clone(), json });
     }
     sub.plan_dirty = false;
 }
@@ -566,7 +649,10 @@ mod tests {
     fn values(o: &Outcome) -> Vec<(String, String)> {
         o.deliveries
             .iter()
-            .map(|d| (d.address.clone(), d.value.as_ref().map_or("<payload>".into(), |v| String::from_utf8_lossy(v).into_owned())))
+            .map(|d| {
+                let v = o.value(d).map_or("<payload>".into(), |v| String::from_utf8_lossy(v).into_owned());
+                (d.address.to_str().unwrap().to_string(), v)
+            })
             .collect()
     }
 
@@ -700,6 +786,110 @@ mod tests {
             ("p:$spb/G/N;metric=m", "address 'p:$spb/G/N;metric=m': G/N is offline (no birth received)"),
         ] {
             assert_eq!(r.write(a, b"1", FLOAT, 0, 0, 1, false).unwrap_err(), msg);
+        }
+    }
+
+    // counts the allocations of the current thread (the whole test binary
+    // uses it; other tests only pay a thread-local increment)
+    mod counting {
+        use std::alloc::{GlobalAlloc, Layout, System};
+        use std::cell::Cell;
+
+        thread_local!(static COUNT: Cell<usize> = const { Cell::new(0) });
+
+        pub struct Counting;
+
+        unsafe impl GlobalAlloc for Counting {
+            unsafe fn alloc(&self, l: Layout) -> *mut u8 {
+                let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+                System.alloc(l)
+            }
+            unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
+                System.dealloc(p, l)
+            }
+            unsafe fn realloc(&self, p: *mut u8, l: Layout, n: usize) -> *mut u8 {
+                let _ = COUNT.try_with(|c| c.set(c.get() + 1));
+                System.realloc(p, l, n)
+            }
+        }
+
+        #[global_allocator]
+        static ALLOC: Counting = Counting;
+
+        pub fn allocations() -> usize {
+            COUNT.with(|c| c.get())
+        }
+    }
+
+    // a message costs no allocations once the buffers have grown
+    #[test]
+    fn messages_do_not_allocate() {
+        let mut r = Router::new();
+        for a in ["p:s/+", "p:s/1", "p:s/1;json=data.v;ts=data.t", "p:s/1;json=data.n", "p:s/1;json=data.list"] {
+            r.add(a, a.ends_with("list"), true, 1).unwrap();
+        }
+        // payloads that fit the addresses (alternating misfits log new warnings)
+        let payloads: [&[u8]; 3] = [
+            br#"{"data":{"v":21.5,"t":1700000000000,"n":"text \"quoted\" \u00e9","list":[1,2,3]},"x":{"y":[{"z":1}]}}"#,
+            br#"{"data":{"v":-3,"t":"2023-11-14T22:13:20.123Z","n":"other","list":"one item"}}"#,
+            br#"{"data":{"v":7,"t":1700000000001,"n":"","list":[]}}"#,
+        ];
+        let mut out = Outcome::default();
+        let run = |r: &mut Router, out: &mut Outcome| {
+            for p in payloads {
+                r.message_into("s/1", p, 0, "", 0, out);
+                assert!(out.deliveries.len() >= 2);
+            }
+        };
+        for _ in 0..3 {
+            run(&mut r, &mut out); // warm-up: plans, buffers
+        }
+        let before = counting::allocations();
+        for _ in 0..100 {
+            run(&mut r, &mut out);
+        }
+        assert_eq!(counting::allocations() - before, 0, "allocations per 300 messages");
+
+        // a payload that keeps not fitting: warned once, then nothing either
+        r.message_into("s/1", b"42", 0, "", 0, &mut out);
+        assert!(!out.warnings.is_empty());
+        let before = counting::allocations();
+        for _ in 0..100 {
+            r.message_into("s/1", b"42", 0, "", 0, &mut out);
+            r.message_into("s/1", b"{\"data\":", 0, "", 0, &mut out);
+        }
+        assert!(out.warnings.is_empty());
+        let not_json = counting::allocations() - before;
+        // (the error text of a document that is not JSON is made per message)
+        assert!(not_json <= 100 * 2, "allocations for 200 misfits: {not_json}");
+
+        // the same through the C ABI the driver calls
+        unsafe {
+            use crate::ffi::*;
+            let h = rsmqtt_wincc_router_new();
+            for a in [c"p:s/+", c"p:s/1;json=data.v"] {
+                let mut f = RsmqttWinccBuf { data: std::ptr::null_mut(), len: 0 };
+                rsmqtt_wincc_router_add(h, a.as_ptr(), 0, 1, 1, &mut f);
+                rsmqtt_wincc_buf_free(f);
+            }
+            let p = payloads[0];
+            let mut d = std::mem::zeroed::<RsmqttWinccDelivery>();
+            let mut call = || {
+                rsmqtt_wincc_router_message(h, c"s/1".as_ptr(), p.as_ptr() as _, p.len(), 0, c"".as_ptr(), 0);
+                for i in 0..rsmqtt_wincc_router_delivery_count(h) {
+                    rsmqtt_wincc_router_delivery_get(h, i, &mut d);
+                }
+            };
+            for _ in 0..3 {
+                call();
+            }
+            let before = counting::allocations();
+            for _ in 0..100 {
+                call();
+            }
+            assert_eq!(counting::allocations() - before, 0, "allocations per 100 messages through the C ABI");
+            assert_eq!(rsmqtt_wincc_router_delivery_count(h), 2);
+            rsmqtt_wincc_router_free(h);
         }
     }
 

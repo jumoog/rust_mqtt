@@ -12,6 +12,10 @@
 // the rsmqtt C ABI goes into this static library
 extern crate rsmqtt;
 
+// only the json_bench example uses it (feature bench-sonic)
+#[cfg(feature = "bench-sonic")]
+use sonic_rs as _;
+
 pub mod json;
 pub mod address;
 pub mod redu;
