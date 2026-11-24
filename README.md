@@ -357,6 +357,20 @@ Set WinCC OA's driver output queue in the `[rsmqtt]` section of the project conf
 
 **Known issue:** QoS 2 *publishing* slows down disproportionately when tens of thousands of QoS 2 messages are queued at once (15k: 21k msg/s, 150k: 2.7k msg/s). It sits in the outgoing QoS 2 handling of paho.mqtt.rust; QoS 0/1, receiving, and normal QoS 2 rates are not affected.
 
+### Compared with the WinCC OA MQTT driver
+
+The same load through `WCCOArsmqtt` and through the MQTT driver that ships with WinCC OA 3.21 (`WCCOAmqtt`), on the same PC and broker as above. Both drivers ran in the project at the same time, each with its own 500 input DPEs on its own topics, and were measured one after the other: the driver not under test received nothing. The [stress example](crates/rsmqtt/examples/stress.rs) published 500 topics × N rounds at QoS 1 (`--payload` sets the payload, e.g. `--payload '{"Value":{r}}'`).
+
+| Scenario | `WCCOArsmqtt` | `WCCOAmqtt` | Difference |
+|---|---|---|---|
+| Plain number, 1M messages | 280k msg/s, 4.6 µs CPU/msg | 25k msg/s, 39 µs CPU/msg | 11× faster, 8.5× less CPU |
+| Small JSON `{"Value":n}`, 500k messages | 280k msg/s, 5.1 µs CPU/msg | 25k msg/s, 40 µs CPU/msg | 11× faster, 7.8× less CPU |
+| 4 KB JSON, value after a 4000 character string, 100k messages | 113k msg/s, 14.5 µs CPU/msg | 15k msg/s, 60 µs CPU/msg | 7.6× faster, 4.1× less CPU |
+
+- **Measured:** the time from the first value change until all 500 DPEs show the last round (in WinCC OA), and the CPU time of the driver process per message; the average of two runs each, which differed by at most 5 %. `WCCOArsmqtt` was done when the generator was, so its limit is higher than these rates.
+- **No loss on either side:** all 500 DPEs ended at the last value, 10 sample DPEs received every value, and no output queue overflowed (`_Driver<n>.OV`).
+- **Same settings where both have them:** `maxOutputQueueSize = 1000000` in `[rsmqtt]` and `[mqtt]` (with the default queue `WCCOAmqtt` overflowed and dropped intermediate values), old/new comparison off. JSON: `json=Value` here, the JSON profile "Value only" (`_value` = `Value`) in `WCCOAmqtt`. Otherwise `WCCOAmqtt` ran with its defaults (keep alive 20 s, no persistent session); other settings may change its numbers.
+
 ## License
 
 rsmqtt (both crates, the driver, panels, scripts and tests) is licensed under either of
