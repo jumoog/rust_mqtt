@@ -304,6 +304,8 @@ Notes:
 
 [tests/winccoa/service_demo.ctl](tests/winccoa/service_demo.ctl) is a small example to run as a CTRL manager (`WCCOActrl -num 97 service_demo.ctl`, copied to the project's `scripts`): it subscribes to `plant:demo/#`, logs every message, answers it on `demo_ack/<rest>` and publishes a counter on `demo/tick` every 5 s. A second subscription on `demo_q2/#` with QoS 2 checks every 5 s that its own numbered QoS 2 messages arrive once, in order and with `qos` 2 (`service_demo: QoS 2 PASS` in the manager's log).
 
+[tests/winccoa/service_lease_test.ctl](tests/winccoa/service_lease_test.ctl) checks the lease (run it the same way, `WCCOActrl -num 96 service_lease_test.ctl`, about 5 minutes): a batch of 700 messages whose callbacks take 0.2 s each (about 140 s) arrives completely and in order, because the library renews the subscription; and a single callback call of 130 s loses the messages published meanwhile, after which the subscription is made again and new messages arrive. Results are `service_lease_test: PASS/FAIL` lines in the manager's log.
+
 ## Tests
 
 ```powershell
