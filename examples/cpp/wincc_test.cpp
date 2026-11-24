@@ -106,6 +106,87 @@ int main()
   CHECK(S::stateTopic("h") == "spBv1.0/STATE/h" && S::statePayload(true, 5) == R"({"online":true,"timestamp":5})");
   CHECK(S::nodeFilter("G", "N") == "spBv1.0/G/+/N/#" && S::validId("N") && !S::validId("a/b"));
 
+  // connection settings: broker config, reveal callback, errors, client options
+  {
+    W::Settings st("plant", 3);
+    CHECK(st.subscribeQoS() == 1 && st.publishQoS() == 1 && !st.publishRetain() && st.autoReconnect() &&
+          st.reconnectInterval() == std::chrono::seconds(10));
+    W::BrokerConfig cfg;
+    cfg.serverURI = "tcp://localhost:1883";
+    cfg.password = "secret";
+    cfg.subscribeQoS = 2;
+    cfg.options = {"automaticReconnect=0", "sparkplug.hostId=scada", "redu.clientId=b"};
+    std::vector<std::string> seen;
+    W::Settings::Reveal reveal = [&seen](const std::string &stored, std::string &plain, std::string &e) {
+      seen.push_back(stored);
+      if ( stored == "broken" ) { e = "decryption failed"; return false; }
+      plain = std::string("p\0w", 3);  // NUL bytes survive
+      return true;
+    };
+    CHECK(st.applyBrokerConfig(cfg, false, reveal, err) && seen.size() == 1 && seen[0] == "secret");
+    CHECK(st.subscribeQoS() == 2 && !st.autoReconnect() && st.spbStateHost(false) == "scada" && st.spbStateHost(true).empty());
+    cfg.password = "broken";
+    CHECK(!st.applyBrokerConfig(cfg, false, reveal, err) && err == "Config.Password: decryption failed");
+    cfg.password.clear();
+    cfg.options = {"nonsense"};
+    CHECK(!st.applyBrokerConfig(cfg, false, nullptr, err) && err == "Config.Options entry 'nonsense' is not 'name=value'");
+    CHECK(st.subscribeQoS() == 2);  // unchanged on failure
+
+    std::vector<std::string> warnings;
+    st.setOption("will.topic", "lwt", err);
+    rsmqtt::Options o = st.clientOptions(false, "", 1234, warnings);
+    CHECK(warnings.size() == 1 && warnings[0].find("STATE will") != std::string::npos && st.stateTs() == 1234);
+    rsmqtt::Client c(st.clientOptions(true, "", 1, warnings));
+    CHECK(c.clientId() == "WCCOArsmqtt_3_plant_2");  // redu.clientId was applied for host 1: only checked
+    CHECK(!st.setOption("will.qos", "3", err) && err.find("QoS must be 0, 1 or 2") != std::string::npos);
+    CHECK(!st.applyReduOption("bogus", "1", false, err) && err == "unknown option 'redu.bogus'");
+    CHECK(!st.setSpbHostId("a/b", err) && W::Settings::isSecretOption("Pass_word") && !W::Settings::isSecretOption("user"));
+  }
+
+  // message router: registry, deliveries with and without a value, $state, Sparkplug
+  {
+    using R = W::Router;
+    R r;
+    std::string filter;
+    CHECK(r.add("p:s/+", false, true, 1, filter, err) == R::Added::Subscribe && filter == "s/+");
+    CHECK(r.add("p:s/+;json=v;ts=t", true, true, 1, filter, err) == R::Added::Nothing);  // same filter: plan only
+    CHECK(r.add("p:$state", false, true, 1, filter, err) == R::Added::State);
+    CHECK(r.add("p:a;qos=9", false, true, 1, filter, err) == R::Added::Error && err == "qos must be 0, 1 or 2");
+    CHECK(r.add("p:$spb/G/N;online", false, true, 1, filter, err) == R::Added::Subscribe && filter == "spBv1.0/G/+/N/#");
+    int qos = -1, flags = -1;
+    CHECK(r.filter("s/+", qos, flags) && qos == 1 && flags == 0 && !r.filter("x", qos, flags));
+    CHECK((r.filters() == std::vector<std::string>{"s/+", "spBv1.0/G/+/N/#"}) && r.hasAddresses());
+
+    const R::Outcome &o = r.message("s/1", std::string(R"({"v":"a\u0000b","t":1700000000000})"), 0, "", 0);
+    CHECK(o.deliveries.size() == 2 && std::string(o.deliveries[0].address) == "p:s/+" && !o.deliveries[0].hasValue);
+    CHECK(o.deliveries[1].hasValue && o.deliveries[1].value == std::string("\"a\\u0000b\"") && o.deliveries[1].hasTime &&
+          o.deliveries[1].timeMs == 1700000000000LL && o.deliveries[1].periphTime);
+    const R::Outcome &st = r.state(true);
+    CHECK(st.deliveries.size() == 1 && st.deliveries[0].value == "1" && st.deliveries[0].validity == RSMQTT_WINCC_VALIDITY_KEEP);
+    const R::Outcome &c = r.connected("scada", 7);
+    CHECK(c.subscribe.size() == 1 && std::string(c.subscribe[0].first) == "spBv1.0/STATE/scada" && c.publish.size() == 1 &&
+          c.publish[0].payload == R"({"online":true,"timestamp":7})" && c.publish[0].retain && c.deliveries.size() == 1 &&
+          c.deliveries[0].value == "0" && c.deliveries[0].validity == RSMQTT_WINCC_VALIDITY_VALID);
+    const R::Outcome &w = r.message("s/2", "{}", 0, "", 0);
+    CHECK(w.warnings.size() == 1 && !w.warnings[0].first && std::string(w.warnings[0].second).find("no value at v") != std::string::npos);
+    R::Write wr;
+    CHECK(!r.write("p:$spb/G/N;online", "1", 1007, 0, 0, 1, false, wr, err) && err == "address 'p:$spb/G/N;online': cannot be written");
+    CHECK(r.add("p:out;json=v", false, false, 1, filter, err) == R::Added::Nothing);
+    CHECK(r.write("p:out;json=v", std::string("a\0b", 3), 1001, 0, 0, 2, true, wr, err) && wr.topic == "out" &&
+          wr.payload == R"({"v":"a\u0000b"})" && wr.qos == 2 && wr.retain);
+    CHECK(!r.remove("p:s/+", true, filter) && r.remove("p:s/+;json=v;ts=t", true, filter) && filter == "s/+");
+  }
+
+  // values: numbers and bool from payload text
+  {
+    rsmqtt_wincc_number n{};
+    CHECK(W::values::parseNumber(1002, " \"12.0\" ", false, n, err) && n.i == 12);
+    CHECK(W::values::parseNumber(1005, "18446744073709551615", false, n, err) && n.u == UINT64_MAX);
+    CHECK(W::values::parseNumber(1006, "true", false, n, err) && n.f == 1.0);
+    CHECK(W::values::parseNumber(1007, "off", false, n, err) && n.b == 0);
+    CHECK(!W::values::parseNumber(1002, std::string("1\0", 2), false, n, err) && err.find("cannot convert") == 0);
+  }
+
   if ( failures )
   {
     std::cerr << failures << " check(s) failed\n";

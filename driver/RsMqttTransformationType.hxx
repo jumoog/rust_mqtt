@@ -3,7 +3,8 @@
 
 #include <ConfigTypes.hxx>
 
-// Values for _address.._datatype of rsmqtt addresses.
+// Values for _address.._datatype of rsmqtt addresses; keep them in step with
+// crates/rsmqtt-wincc/src/values.rs (types), which converts the payload text.
 // Payloads are text (UTF-8) except for Blob, which is the raw payload.
 namespace RsMqttTransformationType
 {

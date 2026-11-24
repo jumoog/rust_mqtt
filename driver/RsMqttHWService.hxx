@@ -6,7 +6,6 @@
 #include <TimeVar.hxx>
 
 #include <chrono>
-#include <set>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -30,22 +29,21 @@ class RsMqttHWService : public HWService
     void handleEvents(RsMqttConnection &conn);
     /// periphTime: the value carries its own time (ts=), else `time` is the receive time
     /// validity: 0 leaves the invalid bit alone, 1 clears it, 2 sets it
-    void deliver(const std::string &address, std::string_view payload, const TimeVar &time = TimeVar(),
+    void deliver(const char *address, std::string_view payload, const TimeVar &time = TimeVar(),
                  bool periphTime = false, int validity = 0);
+    /// Carries out what the router returned: warnings, subscriptions and
+    /// messages to publish, values for the addresses (`payload`: the message
+    /// for deliveries without a value of their own).
+    void apply(RsMqttConnection &conn, const rsmqtt::wincc::Router::Outcome &out, std::string_view payload = {});
+    void deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload);
     // Sparkplug B host application
-    void sparkplugMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload);
-    void sparkplugApply(RsMqttConnection &conn, const std::vector<RsMqttSparkplug::Update> &updates);
     void sparkplugConnected(RsMqttConnection &conn);
     void sparkplugOffline(RsMqttConnection &conn);
     void sparkplugGoodbye(RsMqttConnection &conn);
-    void deliverToSubscription(RsMqttConnection::Subscription &sub, std::string_view payload);
-    void jsonProblem(const std::string &address, const std::string &text);
-    void deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload);
     void pushState(RsMqttConnection &conn);
     void publishBrokerState(RsMqttConnection &conn, bool force);
     void drainTrace();
 
-    std::set<std::string> jsonWarned;  // addresses whose last JSON payload did not fit (warned once)
     bool started = false;
     std::chrono::steady_clock::time_point startTime{};
 };

@@ -14,11 +14,9 @@
 #include <UIntegerVar.hxx>
 #include <ULongVar.hxx>
 
-#include <cctype>
 #include <charconv>
 #include <cmath>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -37,58 +35,6 @@ namespace
   {
     ErrHdl::error(ErrClass::PRIO_WARNING, ErrClass::ERR_PARAM, ErrClass::UNEXPECTEDSTATE,
                   "RsMqttTrans", func, text);
-  }
-
-  std::string_view trim(std::string_view s)
-  {
-    while ( !s.empty() && std::isspace(static_cast<unsigned char>(s.front())) ) s.remove_prefix(1);
-    while ( !s.empty() && std::isspace(static_cast<unsigned char>(s.back())) ) s.remove_suffix(1);
-    // tolerate JSON strings like "\"21.5\""
-    if ( s.size() >= 2 && s.front() == '"' && s.back() == '"' ) s = s.substr(1, s.size() - 2);
-    return s;
-  }
-
-  bool ieq(std::string_view a, const char *b)
-  {
-    size_t n = strlen(b);
-    if ( a.size() != n ) return false;
-    for (size_t i = 0; i < n; i++)
-      if ( std::tolower(static_cast<unsigned char>(a[i])) != b[i] ) return false;
-    return true;
-  }
-
-  bool parseBool(std::string_view s, bool &out)
-  {
-    if ( ieq(s, "true") || ieq(s, "on") || ieq(s, "yes") ) { out = true; return true; }
-    if ( ieq(s, "false") || ieq(s, "off") || ieq(s, "no") ) { out = false; return true; }
-    double d = 0;
-    auto r = std::from_chars(s.data(), s.data() + s.size(), d);
-    if ( r.ec == std::errc() && r.ptr == s.data() + s.size() ) { out = (d != 0.0); return true; }
-    return false;
-  }
-
-  bool parseDouble(std::string_view s, double &out)
-  {
-    bool b;
-    if ( ieq(s, "true") || ieq(s, "false") ) { parseBool(s, b); out = b ? 1.0 : 0.0; return true; }
-    if ( !s.empty() && s.front() == '+' ) s.remove_prefix(1);
-    auto r = std::from_chars(s.data(), s.data() + s.size(), out);
-    return r.ec == std::errc() && r.ptr == s.data() + s.size();
-  }
-
-  // Integer parse; accepts integral floating point text like "12.0" or "1e3".
-  template <class I> bool parseInt(std::string_view s, I &out)
-  {
-    std::string_view t = s;
-    if ( !t.empty() && t.front() == '+' ) t.remove_prefix(1);
-    auto r = std::from_chars(t.data(), t.data() + t.size(), out);
-    if ( r.ec == std::errc() && r.ptr == t.data() + t.size() ) return true;
-    double d;
-    if ( !parseDouble(s, d) || !std::isfinite(d) || std::floor(d) != d ) return false;
-    // parenthesized: windows.h may define a max() macro
-    if ( d < (double) (std::numeric_limits<I>::lowest)() || d > (double) (std::numeric_limits<I>::max)() ) return false;
-    out = static_cast<I>(d);
-    return true;
   }
 
   template <class N> std::string numToString(N v)
@@ -259,20 +205,21 @@ Variable *RsMqttTrans::textToItem(std::string_view text, bool jsonString, std::s
   if ( type == T::Blob )
     return new BlobVar(reinterpret_cast<PVSSuchar *>(const_cast<char *>(text.data())), (PVSSulong) text.size(), true);  // copy
 
-  std::string_view s = jsonString ? text : trim(text);
-  if ( jsonString )
-    while ( !s.empty() && std::isspace(static_cast<unsigned char>(s.front())) ) s.remove_prefix(1);
+  // numbers and bool: crates/rsmqtt-wincc/src/values.rs
+  rsmqtt_wincc_number n{};
+  if ( !rsmqtt::wincc::values::parseNumber((int) type, text, jsonString, n, why) )
+    return nullptr;
   switch ( type )
   {
-    case T::Int32:  { int32_t v;  if ( parseInt(s, v) ) return new IntegerVar(v);  break; }
-    case T::UInt32: { uint32_t v; if ( parseInt(s, v) ) return new UIntegerVar(v); break; }
-    case T::Int64:  { int64_t v;  if ( parseInt(s, v) ) return new LongVar(v);     break; }
-    case T::UInt64: { uint64_t v; if ( parseInt(s, v) ) return new ULongVar(v);    break; }
-    case T::Float:  { double v;   if ( parseDouble(s, v) ) return new FloatVar(v); break; }
-    case T::Bool:   { bool v;     if ( parseBool(s, v) ) return new BitVar(v ? PVSS_TRUE : PVSS_FALSE); break; }
-    default: break;
+    case T::Int32:  return new IntegerVar((int32_t) n.i);
+    case T::UInt32: return new UIntegerVar((uint32_t) n.u);
+    case T::Int64:  return new LongVar((int64_t) n.i);
+    case T::UInt64: return new ULongVar((uint64_t) n.u);
+    case T::Float:  return new FloatVar(n.f);
+    case T::Bool:   return new BitVar(n.b ? PVSS_TRUE : PVSS_FALSE);
+    default:        break;
   }
-  why = "cannot convert " + shown(text) + " to the configured data type " + std::to_string((int) type);
+  why = "unsupported data type " + std::to_string((int) type);
   return nullptr;
 }
 

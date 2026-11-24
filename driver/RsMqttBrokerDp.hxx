@@ -19,34 +19,13 @@
 
 #include <DrvIntDp.hxx>
 
+#include <rsmqtt_wincc.hpp>
+
 #include <string>
 #include <vector>
 
-/// Settings read from a _RsMqttBroker DP.
-struct RsMqttBrokerConfig
-{
-  bool        active = false;
-  std::string serverURI;
-  std::vector<std::string> serverURIs;
-  std::string clientId;
-  int         mqttVersion = 0;
-  int         keepAlive = 0;
-  bool        cleanSession = true;
-  std::string username;
-  std::string password;
-  std::string tlsTrustStore;
-  std::string tlsKeyStore;
-  std::string tlsPrivateKey;
-  bool        tlsVerify = false;
-  std::string willTopic;
-  std::string willPayload;
-  int         willQoS = 0;
-  bool        willRetain = false;
-  int         subscribeQoS = 1;
-  int         publishQoS = 1;
-  bool        publishRetain = false;
-  std::vector<std::string> options;  // "name=value", any rsmqtt option
-};
+/// Settings read from a _RsMqttBroker DP (applied by rsmqtt::wincc::Settings).
+using RsMqttBrokerConfig = rsmqtt::wincc::BrokerConfig;
 
 /// Connection state written to State.ConnState
 enum RsMqttConnState

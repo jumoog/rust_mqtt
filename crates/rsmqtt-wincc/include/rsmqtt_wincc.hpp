@@ -1,6 +1,6 @@
 // rsmqtt_wincc.hpp - header-only C++17 wrapper of the rsmqtt-wincc C ABI
 // (rsmqtt_wincc.h): address syntax, JSON paths, Sparkplug B host
-// application and redundancy names for the WinCC OA driver.
+// application, redundancy names and connection settings for the WinCC OA driver.
 //
 //   rsmqtt::wincc::Address a;
 //   std::string err;
@@ -15,8 +15,11 @@
 #define RSMQTT_WINCC_HPP
 
 #include "rsmqtt_wincc.h"
+#include "rsmqtt.hpp"
 
+#include <chrono>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -409,6 +412,403 @@ namespace rsmqtt::wincc
     inline bool validId(std::string_view id)
     {
       return rsmqtt_wincc_spb_valid_id(std::string(id).c_str()) != 0;
+    }
+  }
+
+  //---------------------------------------------------- connection settings
+
+  /// The Config.* elements of a _RsMqttBroker DP.
+  struct BrokerConfig
+  {
+    bool        active = false;  // not part of the settings: the driver decides
+    std::string serverURI;
+    std::vector<std::string> serverURIs;
+    std::string clientId;
+    int         mqttVersion = 0;
+    int         keepAlive = 0;
+    bool        cleanSession = true;
+    std::string username;
+    std::string password;
+    std::string tlsTrustStore;
+    std::string tlsKeyStore;
+    std::string tlsPrivateKey;
+    bool        tlsVerify = false;
+    std::string willTopic;
+    std::string willPayload;
+    int         willQoS = 0;
+    bool        willRetain = false;
+    int         subscribeQoS = 1;
+    int         publishQoS = 1;
+    bool        publishRetain = false;
+    std::vector<std::string> options;  // "name=value", any rsmqtt option
+  };
+
+  /// Settings of one broker connection (crates/rsmqtt-wincc/src/settings.rs):
+  /// the rsmqtt options, default QoS / retain of the addresses, reconnect
+  /// interval and the Sparkplug host ids.
+  class Settings
+  {
+    public:
+      /// Decrypts a stored password (plain values unchanged); false and err on failure.
+      using Reveal = std::function<bool(const std::string &stored, std::string &plain, std::string &err)>;
+
+      /// The driver's defaults for a connection of this name.
+      Settings(const std::string &name, int manNum) : s(rsmqtt_wincc_settings_new(name.c_str(), manNum))
+      {
+        if ( !s )
+          throw rsmqtt::Error(RSMQTT_FAILURE, lastError());
+      }
+      ~Settings() { rsmqtt_wincc_settings_free(s); }
+      Settings(const Settings &) = delete;
+      Settings &operator=(const Settings &) = delete;
+
+      /// An rsmqtt option (config file).
+      bool setOption(const std::string &name, std::string_view value, std::string &err)
+      {
+        return ok(rsmqtt_wincc_settings_set_option(s, name.c_str(), value.data(), value.size()), err);
+      }
+
+      /// sparkplug.hostId (config file).
+      bool setSpbHostId(const std::string &id, std::string &err)
+      {
+        return ok(rsmqtt_wincc_settings_set_spb_host_id(s, id.c_str()), err);
+      }
+
+      /// A "redu.<option>" entry (option without "redu."): sets it on the
+      /// second redundant host, only checks it on host 1.
+      bool applyReduOption(const std::string &option, std::string_view value, bool host2, std::string &err)
+      {
+        return ok(rsmqtt_wincc_settings_apply_redu_option(s, option.c_str(), value.data(), value.size(), host2), err);
+      }
+
+      /// Builds the settings from a broker DP; on failure they stay as they were.
+      bool applyBrokerConfig(const BrokerConfig &cfg, bool host2, const Reveal &reveal, std::string &err)
+      {
+        auto str = [](const std::string &v) { return rsmqtt_wincc_str{v.data(), v.size()}; };
+        std::vector<rsmqtt_wincc_str> uris, options;
+        for (const auto &u : cfg.serverURIs) uris.push_back(str(u));
+        for (const auto &o : cfg.options) options.push_back(str(o));
+        rsmqtt_wincc_broker_config c{};
+        c.server_uri = str(cfg.serverURI);
+        c.server_uris = uris.data();
+        c.server_uris_len = uris.size();
+        c.client_id = str(cfg.clientId);
+        c.mqtt_version = cfg.mqttVersion;
+        c.keep_alive = cfg.keepAlive;
+        c.clean_session = cfg.cleanSession;
+        c.username = str(cfg.username);
+        c.password = str(cfg.password);
+        c.tls_trust_store = str(cfg.tlsTrustStore);
+        c.tls_key_store = str(cfg.tlsKeyStore);
+        c.tls_private_key = str(cfg.tlsPrivateKey);
+        c.tls_verify = cfg.tlsVerify;
+        c.will_topic = str(cfg.willTopic);
+        c.will_payload = str(cfg.willPayload);
+        c.will_qos = cfg.willQoS;
+        c.will_retain = cfg.willRetain;
+        c.subscribe_qos = cfg.subscribeQoS;
+        c.publish_qos = cfg.publishQoS;
+        c.publish_retain = cfg.publishRetain;
+        c.options = options.data();
+        c.options_len = options.size();
+        return ok(rsmqtt_wincc_settings_apply_broker_config(s, &c, host2, reveal ? &callReveal : nullptr,
+                                                            const_cast<Reveal *>(&reveal)), err);
+      }
+
+      /// The Sparkplug host id this driver publishes STATE for ("" for none).
+      std::string spbStateHost(bool host2) const
+      {
+        rsmqtt_wincc_buf b{};
+        if ( rsmqtt_wincc_settings_spb_state_host(s, host2, &b) != 0 )
+          return std::string();
+        return take(b);
+      }
+
+      /// The options to create the client with (STATE will, client id of host 2,
+      /// persistence folder below dataDir); warnings for the log.
+      rsmqtt::Options clientOptions(bool host2, const std::string &dataDir, int64_t nowMs, std::vector<std::string> &warnings)
+      {
+        rsmqtt_wincc_buf w{};
+        rsmqtt_options *o = rsmqtt_wincc_settings_client_options(s, host2, dataDir.c_str(), nowMs, &w);
+        if ( !o )
+          throw rsmqtt::Error(RSMQTT_FAILURE, lastError());
+        std::string text = take(w);
+        for (size_t b = 0; b < text.size();)
+        {
+          size_t e = text.find('\n', b);
+          if ( e == std::string::npos ) e = text.size();
+          warnings.push_back(text.substr(b, e - b));
+          b = e + 1;
+        }
+        return rsmqtt::Options::adopt(o);
+      }
+
+      int     subscribeQoS() const { return (int) get(RSMQTT_WINCC_SETTINGS_SUBSCRIBE_QOS); }
+      int     publishQoS() const { return (int) get(RSMQTT_WINCC_SETTINGS_PUBLISH_QOS); }
+      bool    publishRetain() const { return get(RSMQTT_WINCC_SETTINGS_PUBLISH_RETAIN) != 0; }
+      std::chrono::milliseconds reconnectInterval() const
+      {
+        return std::chrono::milliseconds(get(RSMQTT_WINCC_SETTINGS_RECONNECT_INTERVAL_MS));
+      }
+      bool    autoReconnect() const { return get(RSMQTT_WINCC_SETTINGS_AUTO_RECONNECT) != 0; }
+      /// Timestamp of the STATE messages of the current client (set by clientOptions).
+      int64_t stateTs() const { return get(RSMQTT_WINCC_SETTINGS_STATE_TS); }
+
+      void setSubscribeQoS(int q) { rsmqtt_wincc_settings_set(s, RSMQTT_WINCC_SETTINGS_SUBSCRIBE_QOS, q); }
+      void setPublishQoS(int q) { rsmqtt_wincc_settings_set(s, RSMQTT_WINCC_SETTINGS_PUBLISH_QOS, q); }
+      void setPublishRetain(bool r) { rsmqtt_wincc_settings_set(s, RSMQTT_WINCC_SETTINGS_PUBLISH_RETAIN, r); }
+      void setReconnectInterval(std::chrono::milliseconds i)
+      {
+        rsmqtt_wincc_settings_set(s, RSMQTT_WINCC_SETTINGS_RECONNECT_INTERVAL_MS, (int64_t) i.count());
+      }
+
+      /// Options whose value may be encrypted (password).
+      static bool isSecretOption(const std::string &name) { return rsmqtt_wincc_is_secret_option(name.c_str()) != 0; }
+
+    private:
+      int64_t get(int field) const { return rsmqtt_wincc_settings_get(s, field); }
+
+      static bool ok(int rc, std::string &err)
+      {
+        if ( rc == 0 )
+          return true;
+        err = lastError();
+        return false;
+      }
+
+      static int callReveal(void *ctx, const char *stored, size_t len, rsmqtt_wincc_buf *out) noexcept
+      {
+        std::string plain, err;
+        bool done = false;
+        try
+        {
+          done = (*static_cast<const Reveal *>(ctx))(std::string(stored ? stored : "", len), plain, err);
+        }
+        catch (const std::exception &e)
+        {
+          err = e.what();
+        }
+        catch (...)
+        {
+          err = "decryption failed";
+        }
+        const std::string &result = done ? plain : err;
+        *out = rsmqtt_wincc_buf_new(result.data(), result.size());
+        return done ? 0 : -1;
+      }
+
+      rsmqtt_wincc_settings *s;
+  };
+
+  //--------------------------------------------------------- message router
+
+  /// The addresses of one broker connection and how messages reach them
+  /// (crates/rsmqtt-wincc/src/router.rs).
+  class Router
+  {
+    public:
+      enum class Added { Nothing = 0, State = 1, Subscribe = 2, Error = -1 };
+
+      struct Delivery
+      {
+        const char      *address = "";
+        bool             hasValue = false;  // false: the payload of the message as it is
+        std::string_view value;
+        bool             hasTime = false;   // false: now
+        int64_t          timeMs = 0;
+        bool             periphTime = false;  // the value's own time (ts= / Sparkplug)
+        int              validity = RSMQTT_WINCC_VALIDITY_KEEP;
+      };
+
+      struct Publish
+      {
+        const char      *topic = "";
+        std::string_view payload;
+        int              qos = 0;
+        bool             retain = false;
+      };
+
+      /// Results of a call; the views stay valid until the next call that
+      /// changes the router.
+      struct Outcome
+      {
+        std::vector<Delivery> deliveries;
+        std::vector<Publish> publish;
+        std::vector<std::pair<const char *, int>> subscribe;   // (filter, QoS)
+        std::vector<std::pair<bool, const char *>> warnings;   // (from Sparkplug, text)
+      };
+
+      Router() : r(rsmqtt_wincc_router_new()) {}
+      ~Router() { rsmqtt_wincc_router_free(r); }
+      Router(const Router &) = delete;
+      Router &operator=(const Router &) = delete;
+
+      /// Registers an address of a DPE; Subscribe: subscribe `filter`.
+      Added add(const std::string &fullAddress, bool isDyn, bool input, int defaultQoS, std::string &filter,
+                std::string &err)
+      {
+        rsmqtt_wincc_buf b{};
+        int rc = rsmqtt_wincc_router_add(r, fullAddress.c_str(), isDyn, input, defaultQoS, &b);
+        if ( rc < 0 )
+        {
+          err = lastError();
+          return Added::Error;
+        }
+        if ( rc == RSMQTT_WINCC_ADDED_SUBSCRIBE )
+          filter = take(b);
+        return (Added) rc;
+      }
+
+      /// Unregisters an address; true: unsubscribe `filter`.
+      bool remove(const std::string &fullAddress, bool input, std::string &filter)
+      {
+        rsmqtt_wincc_buf b{};
+        if ( rsmqtt_wincc_router_remove(r, fullAddress.c_str(), input, &b) != 1 )
+          return false;
+        filter = take(b);
+        return true;
+      }
+
+      bool filter(const std::string &f, int &qos, int &flags) const
+      {
+        return rsmqtt_wincc_router_filter(r, f.c_str(), &qos, &flags) == 1;
+      }
+
+      std::vector<std::string> filters() const
+      {
+        std::vector<std::string> out;
+        rsmqtt_wincc_buf b{};
+        if ( rsmqtt_wincc_router_filters(r, &b) != 0 )
+          return out;
+        std::string all = take(b);
+        for (size_t p = 0; p < all.size();)
+        {
+          size_t e = all.find('\0', p);
+          if ( e == std::string::npos ) e = all.size();
+          out.push_back(all.substr(p, e - p));
+          p = e + 1;
+        }
+        return out;
+      }
+
+      bool hasAddresses() const { return rsmqtt_wincc_router_has_addresses(r) != 0; }
+
+      /// One message; stateHost / stateTs: the Sparkplug STATE this client publishes ("" for none).
+      const Outcome &message(const std::string &topic, std::string_view payload, int64_t nowMs,
+                             const std::string &stateHost, int64_t stateTs)
+      {
+        rsmqtt_wincc_router_message(r, topic.c_str(), payload.data(), payload.size(), nowMs, stateHost.c_str(), stateTs);
+        return collect();
+      }
+
+      /// The values of the $state addresses.
+      const Outcome &state(bool connected)
+      {
+        rsmqtt_wincc_router_state(r, connected);
+        return collect();
+      }
+
+      /// The connection is established.
+      const Outcome &connected(const std::string &stateHost, int64_t stateTs)
+      {
+        rsmqtt_wincc_router_connected(r, stateHost.c_str(), stateTs);
+        return collect();
+      }
+
+      /// The connection is gone: Sparkplug edge nodes offline, their metrics stale.
+      const Outcome &connectionLost()
+      {
+        rsmqtt_wincc_router_connection_lost(r);
+        return collect();
+      }
+
+      struct Write
+      {
+        std::string topic;
+        std::string payload;
+        int         qos = 0;
+        bool        retain = false;
+      };
+
+      /// The message that writes `value` (payload text of data type valueType)
+      /// to an output address; false and `err` (for the log) if it cannot be written.
+      bool write(const std::string &fullAddress, std::string_view value, int valueType, int64_t timeMs, int64_t nowMs,
+                 int publishQoS, bool publishRetain, Write &out, std::string &err) const
+      {
+        rsmqtt_wincc_buf t{}, p{};
+        int qos = 0, retain = 0;
+        if ( rsmqtt_wincc_router_write(r, fullAddress.c_str(), value.data(), value.size(), valueType, timeMs, nowMs,
+                                       publishQoS, publishRetain, &t, &p, &qos, &retain) != 0 )
+        {
+          err = lastError();
+          return false;
+        }
+        out.topic = take(t);
+        out.payload = take(p);
+        out.qos = qos;
+        out.retain = retain != 0;
+        return true;
+      }
+
+    private:
+      const Outcome &collect()
+      {
+        out.deliveries.clear();
+        out.publish.clear();
+        out.subscribe.clear();
+        out.warnings.clear();
+        for (size_t i = 0, n = rsmqtt_wincc_router_delivery_count(r); i < n; i++)
+        {
+          rsmqtt_wincc_delivery d{};
+          if ( rsmqtt_wincc_router_delivery_get(r, i, &d) != 0 ) continue;
+          Delivery x;
+          x.address = d.address;
+          x.hasValue = d.has_value != 0;
+          x.value = std::string_view(d.value ? d.value : "", d.value_len);
+          x.hasTime = d.has_time != 0;
+          x.timeMs = d.time_ms;
+          x.periphTime = d.periph_time != 0;
+          x.validity = d.validity;
+          out.deliveries.push_back(x);
+        }
+        for (size_t i = 0, n = rsmqtt_wincc_router_publish_count(r); i < n; i++)
+        {
+          rsmqtt_wincc_publish p{};
+          if ( rsmqtt_wincc_router_publish_get(r, i, &p) != 0 ) continue;
+          out.publish.push_back({p.topic, std::string_view(p.payload ? p.payload : "", p.payload_len), p.qos, p.retain != 0});
+        }
+        for (size_t i = 0, n = rsmqtt_wincc_router_subscribe_count(r); i < n; i++)
+        {
+          const char *f = nullptr;
+          int q = 0;
+          if ( rsmqtt_wincc_router_subscribe_get(r, i, &f, &q) == 0 ) out.subscribe.emplace_back(f, q);
+        }
+        for (size_t i = 0, n = rsmqtt_wincc_router_warning_count(r); i < n; i++)
+        {
+          int spb = 0;
+          const char *w = rsmqtt_wincc_router_warning_get(r, i, &spb);
+          out.warnings.emplace_back(spb != 0, w);
+        }
+        return out;
+      }
+
+      rsmqtt_wincc_router *r;
+      Outcome out;
+  };
+
+  //------------------------------------------------------------------ values
+
+  namespace values
+  {
+    /// A number or boolean of data type `type` (1002 int32 .. 1007 bool) from
+    /// payload text (crates/rsmqtt-wincc/src/values.rs); false and `why` if
+    /// it cannot be converted.
+    inline bool parseNumber(int type, std::string_view text, bool jsonString, rsmqtt_wincc_number &out, std::string &why)
+    {
+      if ( rsmqtt_wincc_parse_number(type, text.data(), text.size(), jsonString, &out) == 0 )
+        return true;
+      why = lastError();
+      return false;
     }
   }
 }

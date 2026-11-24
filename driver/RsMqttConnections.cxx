@@ -7,25 +7,8 @@
 #include <PVSSMacros.hxx>
 #include <Resources.hxx>
 
-#include <cctype>
-#include <filesystem>
-
-// TLS transports, as in paho.mqtt.rust's is_secure_uri()
-static bool anySecureUri(const std::string &uri, const std::vector<std::string> &more)
-{
-  auto secure = [](const std::string &u) {
-    for (const char *scheme : {"ssl://", "tls://", "mqtts://", "wss://"})
-      if ( u.rfind(scheme, 0) == 0 )
-        return true;
-    return false;
-  };
-  if ( secure(uri) )
-    return true;
-  for (const auto &u : more)
-    if ( secure(u) )
-      return true;
-  return false;
-}
+#include <chrono>
+#include <set>
 
 static void logError(ErrClass::ErrPrio prio, const char *func, const std::string &text)
 {
@@ -34,280 +17,32 @@ static void logError(ErrClass::ErrPrio prio, const char *func, const std::string
                 "RsMqttConnections", func, CharString(text.c_str()));
 }
 
-static std::string normalizedOptionName(const std::string &name)
+static int64_t nowMs()
 {
-  std::string n;
-  for (char ch : name)
-    if ( ch != '_' && ch != '-' )
-      n += (char) std::tolower((unsigned char) ch);
-  return n;
-}
-
-bool RsMqttConnection::isSecretOption(const std::string &name)
-{
-  return normalizedOptionName(name) == "password";
-}
-
-static std::string trimmed(const std::string &s)
-{
-  // the same characters as Rust's str::trim() in rsmqtt (ASCII part)
-  const char *ws = " \t\r\n\v\f";
-  size_t b = s.find_first_not_of(ws), e = s.find_last_not_of(ws);
-  return b == std::string::npos ? std::string() : s.substr(b, e - b + 1);
-}
-
-void RsMqttConnection::noteOption(const std::string &name, const std::string &value)
-{
-  std::string n = normalizedOptionName(name);
-  std::string v;
-  for (char ch : trimmed(value))
-    v += (char) std::tolower((unsigned char) ch);
-  if ( n == "automaticreconnect" )
-    autoReconnect = (v == "1" || v == "true" || v == "yes" || v == "on");
-  else if ( n == "clientid" )
-    clientId = value;
-  else if ( n == "persistence" )
-    persistence = (v == "file" || v == "default" || v == "1") ? 1 : 0;  // same names as rsmqtt
-  else if ( n == "persistencedir" )
-  {
-    persistenceDirSet = true;
-    persistenceDir = trimmed(value);
-  }
-  else if ( n == "will.topic" )
-    willTopicSet = !trimmed(value).empty();
-}
-
-void RsMqttConnection::applyReduOption(const std::string &option, const std::string &value)
-{
-  if ( normalizedOptionName(trimmed(option)) == "sparkplug.hostid" )
-  {
-    std::string id = trimmed(value);
-    if ( !id.empty() && !RsMqttSparkplug::validId(id) )
-      throw rsmqtt::Error(RSMQTT_INVALID_ARGUMENT, "redu.sparkplug.hostId must not contain / + #");
-    spbReduHostId = id;  // used on host 2 only (spbStateHost)
-    return;
-  }
-  if ( !rsmqtt::Options::isKnown(option) )
-    throw rsmqtt::Error(RSMQTT_UNKNOWN_OPTION, "unknown option 'redu." + option + "'");
-  if ( !RsMqttRedu::isHost2() )
-    return;
-  options.set(option, value);
-  noteOption(option, value);
-  if ( normalizedOptionName(option) == "clientid" )
-    reduClientId = true;
-}
-
-const std::string &RsMqttConnection::spbStateHost() const
-{
-  return RsMqttRedu::isHost2() ? spbReduHostId : spbHostId;
-}
-
-rsmqtt::Options RsMqttConnection::clientOptions() const
-{
-  rsmqtt::Options o = options;
-  // Sparkplug host application: its STATE turns offline with the will
-  if ( !spbStateHost().empty() )
-  {
-    if ( willTopicSet )
-      logError(ErrClass::PRIO_WARNING, "clientOptions",
-               "[" + name + "] sparkplug.hostId: the configured will is replaced by the STATE will of the host application");
-    spbStateTs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                   std::chrono::system_clock::now().time_since_epoch()).count();
-    o.set("will.topic", RsMqttSparkplug::stateTopic(spbStateHost()))
-     .set("will.payload", RsMqttSparkplug::statePayload(false, spbStateTs))
-     .set("will.qos", 1)
-     .set("will.retained", true);
-  }
-  // the redundant hosts must not share a client id
-  std::string id = RsMqttRedu::clientIdForHost(clientId, RsMqttRedu::isHost2(), reduClientId);
-  if ( id != clientId )
-    o.set("clientId", id);
-
-  // as in rsmqtt: persistenceDir alone means file, an explicit persistence= wins
-  bool file = persistence == 1 || (persistence == -1 && persistenceDirSet);
-  if ( !file )
-    return o;
-
-  std::filesystem::path dir = std::filesystem::u8path(persistenceDir);
-  if ( dir.empty() || dir.is_relative() )
-  {
-    std::filesystem::path data = std::filesystem::u8path((const char *) Resources::getDataDir());
-    dir = dir.empty() ? data / "rsmqtt" : data / dir;
-  }
-  std::error_code ec;
-  std::filesystem::create_directories(dir, ec);  // paho reports a folder it cannot use
-  o.set("persistenceDir", dir.lexically_normal().generic_u8string());
-  return o;
-}
-
-//--------------------------------------------------------------------------------
-
-std::string RsMqttConnection::spbKey(const std::string &group, const std::string &node, const std::string &device,
-                                     const std::string &metric, bool online)
-{
-  // \x1f does not occur in ids (and an online key has no metric)
-  return group + '\x1f' + node + '\x1f' + device + '\x1f' + (online ? std::string("\x01") : metric);
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+           std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
 RsMqttConnection::RsMqttConnection(const std::string &n)
-  : name(n), options(defaultOptions(n)), clientId(defaultClientId(n)) {}
+  : name(n), settings(n, (int) Resources::getManNum()) {}
 
-std::string RsMqttConnection::defaultClientId(const std::string &n)
+rsmqtt::Options RsMqttConnection::clientOptions()
 {
-  return "WCCOArsmqtt_" + std::to_string((int) Resources::getManNum()) + "_" + n;
-}
-
-rsmqtt::Options RsMqttConnection::defaultOptions(const std::string &n)
-{
-  // Defaults suitable for a driver; every one can be overridden.
-  rsmqtt::Options o;
-  o.set("clientId", defaultClientId(n))
-   .set("automaticReconnect", true)
-   .set("minRetryInterval", 1)
-   .set("maxRetryInterval", 30)
-   .set("sendWhileDisconnected", true)
-   .set("allowDisconnectedSendAtAnyTime", true)
-   .set("maxBufferedMessages", 10000)
-   .set("deleteOldestMessages", true)
-   .set("completionEvents", "errors");
+  std::vector<std::string> warnings;
+  rsmqtt::Options o = settings.clientOptions(RsMqttRedu::isHost2(), (const char *) Resources::getDataDir(), nowMs(),
+                                             warnings);
+  for (const auto &w : warnings)
+    logError(ErrClass::PRIO_WARNING, "clientOptions", "[" + name + "] " + w);
+  spbHost = settings.spbStateHost(RsMqttRedu::isHost2());
   return o;
 }
 
 bool RsMqttConnection::applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::string &err)
 {
-  try
-  {
-    if ( cfg.serverURI.empty() && cfg.serverURIs.empty() )
-    {
-      err = "Config.ServerURI is empty";
-      return false;
-    }
-
-    rsmqtt::Options o = defaultOptions(name);
-    autoReconnect = true;  // driver default, see defaultOptions()
-    clientId = defaultClientId(name);
-    reduClientId = false;
-    spbHostId.clear();
-    spbReduHostId.clear();
-    willTopicSet = !cfg.willTopic.empty();
-    persistence = -1;
-    persistenceDirSet = false;
-    persistenceDir.clear();
-    o.set("serverURI", cfg.serverURI.empty() ? cfg.serverURIs.front() : cfg.serverURI);
-    if ( !cfg.serverURIs.empty() )
-    {
-      std::string list;
-      for (const auto &u : cfg.serverURIs)
-        list += (list.empty() ? "" : " ") + u;
-      o.set("serverURIs", list);
-    }
-    if ( !cfg.clientId.empty() )   { o.set("clientId", cfg.clientId); clientId = cfg.clientId; }
-    if ( cfg.mqttVersion != 0 )    o.set("MQTTVersion", cfg.mqttVersion);
-    if ( cfg.keepAlive > 0 )       o.set("keepAliveInterval", cfg.keepAlive);
-    o.set("cleansession", cfg.cleanSession);
-    if ( !cfg.username.empty() )   o.set("username", cfg.username);
-    if ( !cfg.password.empty() )
-    {
-      std::string plain;
-      if ( !RsMqttSecret::reveal(cfg.password, plain, err) )
-      {
-        err = "Config.Password: " + err;
-        return false;
-      }
-      o.set("password", plain);
-    }
-    if ( !cfg.tlsTrustStore.empty() ) o.set("ssl.trustStore", cfg.tlsTrustStore);
-    if ( !cfg.tlsKeyStore.empty() )   o.set("ssl.keyStore", cfg.tlsKeyStore);
-    if ( !cfg.tlsPrivateKey.empty() ) o.set("ssl.privateKey", cfg.tlsPrivateKey);
-    // Config.TlsVerify decides the host-name check both ways (the chain is
-    // checked either way). Only for TLS URIs: ssl.* options attach TLS
-    // settings to the connection. Config.Options "ssl.verify=..." still wins.
-    bool secure = anySecureUri(cfg.serverURI, cfg.serverURIs);
-    if ( secure )                     o.set("ssl.verify", cfg.tlsVerify);
-    if ( !cfg.willTopic.empty() )
-    {
-      o.set("will.topic", cfg.willTopic)
-       .set("will.payload", cfg.willPayload)
-       .set("will.qos", cfg.willQoS)
-       .set("will.retained", cfg.willRetain);
-    }
-    // redu.<option> entries last: on the second redundant host they win
-    std::vector<std::pair<std::string, std::string>> redu;
-    for (const auto &opt : cfg.options)
-    {
-      if ( opt.empty() ) continue;
-      size_t eq = opt.find('=');
-      if ( eq == std::string::npos )
-      {
-        err = "Config.Options entry '" + opt + "' is not 'name=value'";
-        return false;
-      }
-      std::string optName = opt.substr(0, eq), value = opt.substr(eq + 1), reduName;
-      if ( normalizedOptionName(trimmed(optName)) == "sparkplug.hostid" )
-      {
-        spbHostId = trimmed(value);
-        if ( !spbHostId.empty() && !RsMqttSparkplug::validId(spbHostId) )
-        {
-          err = "sparkplug.hostId must not contain / + #";
-          return false;
-        }
-        continue;
-      }
-      if ( RsMqttRedu::splitReduOption(trimmed(optName), reduName) )
-      {
-        redu.emplace_back(trimmed(reduName), value);
-        continue;
-      }
-      if ( isSecretOption(optName) && !RsMqttSecret::reveal(value, value, err) )
-      {
-        err = "Config.Options '" + optName + "': " + err;
-        return false;
-      }
-      o.set(optName, value);
-      noteOption(optName, value);
-    }
-    // applyReduOption works on `options`; the previous ones come back on failure
-    rsmqtt::Options previous = options;
-    options = o;
-    for (auto &r : redu)
-    {
-      if ( RsMqttRedu::isHost2() && isSecretOption(r.first) && !RsMqttSecret::reveal(r.second, r.second, err) )
-      {
-        options = previous;
-        err = "Config.Options 'redu." + r.first + "': " + err;
-        return false;
-      }
-      try
-      {
-        applyReduOption(r.first, r.second);
-      }
-      catch (const rsmqtt::Error &)
-      {
-        options = previous;
-        throw;
-      }
-    }
-    o = options;
-    options = previous;
-
-    if ( cfg.subscribeQoS < 0 || cfg.subscribeQoS > 2 || cfg.publishQoS < 0 || cfg.publishQoS > 2 )
-    {
-      err = "Config.SubscribeQoS / Config.PublishQoS must be 0, 1 or 2";
-      return false;
-    }
-
-    options = o;
-    subscribeQoS = cfg.subscribeQoS;
-    publishQoS = cfg.publishQoS;
-    publishRetain = cfg.publishRetain;
-    return true;
-  }
-  catch (const rsmqtt::Error &e)
-  {
-    err = e.what();
-    return false;
-  }
+  return settings.applyBrokerConfig(cfg, RsMqttRedu::isHost2(), RsMqttSecret::reveal, err);
 }
+
+//--------------------------------------------------------------------------------
 
 bool RsMqttConnection::isActive() const
 {
@@ -343,11 +78,11 @@ void RsMqttConnection::subscribe(const std::vector<std::string> &filters)
     std::vector<int> qos, flags;
     for (size_t j = i; j < filters.size() && j < i + batch; j++)
     {
-      auto it = subscriptions.find(filters[j]);
-      if ( it == subscriptions.end() ) continue;
-      f.push_back(it->first);
-      qos.push_back(it->second.qos);
-      flags.push_back(it->second.flags);
+      int q = 0, fl = 0;
+      if ( !router.filter(filters[j], q, fl) ) continue;
+      f.push_back(filters[j]);
+      qos.push_back(q);
+      flags.push_back(fl);
     }
     if ( f.empty() ) continue;
     try
@@ -365,10 +100,7 @@ void RsMqttConnection::subscribe(const std::vector<std::string> &filters)
 
 void RsMqttConnection::subscribeAll()
 {
-  std::vector<std::string> f;
-  for (const auto &s : subscriptions)
-    f.push_back(s.first);
-  subscribe(f);
+  subscribe(router.filters());
 }
 
 void RsMqttConnection::unsubscribe(const std::string &filter)
@@ -507,39 +239,22 @@ bool RsMqttConnections::addAddress(const std::string &fullAddress, const RsMqttA
   bool isNew = (entry.second++ == 0);
   entry.first = addr;
 
-  if ( addr.isState )
+  std::string filter, err;
+  switch ( conn->router.add(fullAddress, addr.dyn, input, conn->settings.subscribeQoS(), filter, err) )
   {
-    conn->stateAddresses[fullAddress]++;
-    conn->statePushNeeded = true;  // HWService writes the current state
-    return isNew;
+    case rsmqtt::wincc::Router::Added::State:
+      conn->statePushNeeded = true;  // HWService writes the current state
+      break;
+    case rsmqtt::wincc::Router::Added::Subscribe:
+      // (Re-)subscribe right away if connected; otherwise it happens on connect.
+      conn->subscribe({filter});
+      break;
+    case rsmqtt::wincc::Router::Added::Error:
+      logError(ErrClass::PRIO_SEVERE, "addAddress", "address '" + fullAddress + "': " + err);
+      break;
+    default:
+      break;
   }
-  // Sparkplug outputs subscribe too: commands need the data types of the births
-  if ( !input && !addr.sparkplug )
-    return isNew;
-
-  int qos = addr.qos >= 0 ? addr.qos : conn->subscribeQoS;
-  bool newFilter = (conn->subscriptions.find(addr.topic) == conn->subscriptions.end());
-  RsMqttConnection::Subscription &sub = conn->subscriptions[addr.topic];
-  bool changed = newFilter || qos > sub.qos || (addr.subFlags & ~sub.flags);
-  if ( newFilter || qos > sub.qos )
-    sub.qos = qos;
-  sub.flags |= addr.subFlags;
-  sub.matching = addr.needsMatching();
-  sub.addresses[fullAddress]++;
-  sub.planDirty = true;
-  if ( addr.sparkplug )
-  {
-    sub.sparkplugRefs++;
-    if ( input )
-      conn->spbIndex[RsMqttConnection::spbKey(addr)][fullAddress]++;
-  }
-  if ( sub.matching )
-    conn->matchingFilters.insert(addr.topic);
-
-  // (Re-)subscribe right away if connected; otherwise it happens on connect.
-  if ( changed )
-    conn->subscribe({addr.topic});
-
   return isNew;
 }
 
@@ -552,53 +267,9 @@ bool RsMqttConnections::removeAddress(const std::string &fullAddress, const RsMq
   if ( last )
     addresses.erase(it);
 
-  RsMqttConnection *conn = find(addr.connection);
-  if ( !conn )
-    return last;
-
-  if ( addr.isState )
-  {
-    auto s = conn->stateAddresses.find(fullAddress);
-    if ( s != conn->stateAddresses.end() && --s->second == 0 )
-      conn->stateAddresses.erase(s);
-    return last;
-  }
-  if ( !input && !addr.sparkplug )
-    return last;
-
-  if ( addr.sparkplug && input )
-  {
-    auto k = conn->spbIndex.find(RsMqttConnection::spbKey(addr));
-    if ( k != conn->spbIndex.end() )
-    {
-      auto a = k->second.find(fullAddress);
-      if ( a != k->second.end() && --a->second == 0 )
-      {
-        k->second.erase(a);
-        conn->spbLast.erase(fullAddress);
-      }
-      if ( k->second.empty() )
-        conn->spbIndex.erase(k);
-    }
-  }
-
-  auto s = conn->subscriptions.find(addr.topic);
-  if ( s == conn->subscriptions.end() )
-    return last;
-  auto a = s->second.addresses.find(fullAddress);
-  if ( a != s->second.addresses.end() )
-  {
-    if ( addr.sparkplug && s->second.sparkplugRefs > 0 )
-      s->second.sparkplugRefs--;
-    if ( --a->second == 0 )
-      s->second.addresses.erase(a);
-  }
-  s->second.planDirty = true;
-  if ( s->second.addresses.empty() )
-  {
-    conn->matchingFilters.erase(addr.topic);
-    conn->subscriptions.erase(s);
-    conn->unsubscribe(addr.topic);
-  }
+  std::string filter;
+  if ( RsMqttConnection *conn = find(addr.connection) )
+    if ( conn->router.remove(fullAddress, input, filter) )
+      conn->unsubscribe(filter);
   return last;
 }

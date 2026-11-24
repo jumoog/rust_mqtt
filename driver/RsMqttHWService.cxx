@@ -3,7 +3,7 @@
 #include "RsMqttConnections.hxx"
 #include "RsMqttRedu.hxx"
 #include "RsMqttResources.hxx"
-#include "RsMqttTransformationType.hxx"
+#include "RsMqttSparkplug.hxx"
 
 #include <DrvManager.hxx>
 #include <ErrHdl.hxx>
@@ -274,7 +274,7 @@ void RsMqttHWService::connect(RsMqttConnection &conn)
     if ( e.code() == RSMQTT_CONNECT_IN_PROGRESS || e.code() == RSMQTT_ALREADY_CONNECTED )
       return;  // the library is (re)connecting by itself
     conn.lastError = e.what();
-    conn.nextConnectAttempt = Clock::now() + conn.reconnectInterval;
+    conn.nextConnectAttempt = Clock::now() + conn.settings.reconnectInterval();
     log(ErrClass::PRIO_WARNING, "connect", "[" + conn.name + "] connect failed: " + e.what());
   }
 }
@@ -305,7 +305,7 @@ void RsMqttHWService::workProc()
 
       // Retry connects that failed. Once a connection was established,
       // the library's automaticReconnect takes over (unless disabled).
-      bool libraryReconnects = c->everConnected && c->autoReconnect;
+      bool libraryReconnects = c->everConnected && c->settings.autoReconnect();
       if ( !c->connected && !c->connecting && !libraryReconnects &&
            now >= c->nextConnectAttempt && !c->client->isConnected() )
         connect(*c);
@@ -313,7 +313,7 @@ void RsMqttHWService::workProc()
 
     if ( c->source == RsMqttConnection::Source::Placeholder && !c->placeholderWarned &&
          now - startTime >= PLACEHOLDER_WARN_DELAY &&
-         (!c->subscriptions.empty() || !c->stateAddresses.empty()) )
+         c->router.hasAddresses() )
     {
       c->placeholderWarned = true;
       log(ErrClass::PRIO_WARNING, "workProc", "addresses use broker '" + c->name +
@@ -410,7 +410,7 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
           if ( !ev->ok() )
           {
             conn.lastError = std::string(ev->text());
-            conn.nextConnectAttempt = Clock::now() + conn.reconnectInterval;
+            conn.nextConnectAttempt = Clock::now() + conn.settings.reconnectInterval();
             log(ErrClass::PRIO_WARNING, "workProc", "[" + conn.name + "] connect failed: " + conn.lastError);
           }
           break;
@@ -447,11 +447,11 @@ void RsMqttHWService::handleEvents(RsMqttConnection &conn)
 
 //--------------------------------------------------------------------------------
 
-void RsMqttHWService::deliver(const std::string &address, std::string_view payload, const TimeVar &time, bool periphTime,
+void RsMqttHWService::deliver(const char *address, std::string_view payload, const TimeVar &time, bool periphTime,
                               int validity)
 {
   HWObject obj;
-  obj.setAddress(address.c_str());
+  obj.setAddress(address);
   obj.setOrgTime(time);
   if ( periphTime )
     obj.setTimeOfPeriphFlag();  // otherwise WinCC OA stamps the value itself
@@ -472,139 +472,6 @@ void RsMqttHWService::deliver(const std::string &address, std::string_view paylo
     DrvManager::getSelfPtr()->toDp(&obj, addrObj);
 }
 
-void RsMqttHWService::jsonProblem(const std::string &address, const std::string &text)
-{
-  // once per address until a payload fits again: a topic may carry many messages
-  if ( jsonWarned.insert(address).second )
-    log(ErrClass::PRIO_WARNING, "deliver", "address '" + address + "': " + text + " (logged once until it works again)");
-}
-
-void RsMqttHWService::deliverToSubscription(RsMqttConnection::Subscription &sub, std::string_view payload)
-{
-  namespace J = RsMqttJson;
-  if ( sub.planDirty )
-  {
-    sub.plan.clear();
-    sub.extractor.clear();
-    RsMqttConnections &conns = RsMqttConnections::instance();
-    for (const auto &a : sub.addresses)
-    {
-      const RsMqttAddress *addr = conns.parsed(a.first);
-      if ( addr && addr->sparkplug )
-        continue;  // decoded by the Sparkplug host (sparkplugMessage)
-      RsMqttConnection::Subscription::Delivery d;
-      d.address = a.first;
-      if ( addr && addr->json )
-      {
-        d.json = true;
-        d.dyn = addr->dyn;
-        d.valueId = sub.extractor.add(addr->jsonPath);
-        d.jsonPath = J::pathString(addr->jsonPath);
-        if ( addr->hasTs )
-        {
-          d.tsId = sub.extractor.add(addr->tsPath);
-          d.tsPath = J::pathString(addr->tsPath);
-        }
-      }
-      sub.plan.push_back(std::move(d));
-    }
-    sub.planDirty = false;
-    // addresses changed: a new or changed configuration warns again
-    jsonWarned.clear();
-  }
-
-  // one pass over the payload for all paths of this subscription
-  if ( !sub.extractor.empty() )
-    sub.extractor.run(payload);
-
-  for (const auto &d : sub.plan)
-  {
-    if ( !d.json )
-    {
-      deliver(d.address, payload);
-      continue;
-    }
-
-    J::Kind kind;
-    std::string_view value;
-    J::Found found = sub.extractor.result(d.valueId, kind, value);
-    if ( found == J::Found::Missing )
-    {
-      jsonProblem(d.address, "the JSON payload has no value at " + d.jsonPath);
-      continue;
-    }
-    if ( found == J::Found::NotJson )
-    {
-      jsonProblem(d.address, "the payload is not JSON: " + sub.extractor.error());
-      continue;
-    }
-    if ( kind == J::Kind::Null )
-      continue;  // no value, nothing to update
-    // dyn: RsMqttTrans reads a JSON array or one value; a string stays a JSON
-    // string so that its text is one item, even if it looks like an array
-    std::string quoted;
-    if ( d.dyn && kind == J::Kind::String )
-      quoted = J::quote(value);
-    std::string_view text = quoted.empty() ? value : std::string_view(quoted);
-
-    TimeVar time;  // current time
-    if ( d.tsId >= 0 )
-    {
-      J::Kind tsKind;
-      std::string_view tsValue;
-      long long ms = 0;
-      if ( sub.extractor.result(d.tsId, tsKind, tsValue) != J::Found::Yes || !J::parseTime(tsKind, tsValue, ms) )
-      {
-        jsonProblem(d.address, "no valid timestamp at " + d.tsPath + ", the current time is used");
-        deliver(d.address, text, time);
-        continue;
-      }
-      long long sec = ms >= 0 ? ms / 1000 : -((-ms + 999) / 1000);
-      time = TimeVar((time_t) sec, (PVSSshort) (ms - sec * 1000));
-    }
-    if ( !jsonWarned.empty() )
-      jsonWarned.erase(d.address);
-    deliver(d.address, text, time, d.tsId >= 0);
-  }
-}
-
-void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
-{
-  // our own STATE: another client (an earlier session's will) set it offline;
-  // addresses on STATE topics still get the message below
-  const std::string &hostId = conn.spbStateHost();
-  if ( !hostId.empty() && topic == RsMqttSparkplug::stateTopic(hostId) )
-  {
-    std::string err;
-    RsMqttJson::Value v;
-    if ( RsMqttJson::get(payload, "online", v, err) == RsMqttJson::Found::Yes && v.text == "false" && conn.client )
-      conn.client->publish(topic, RsMqttSparkplug::statePayload(true, conn.spbStateTs), 1, true);
-  }
-
-  // exact subscriptions
-  auto it = conn.subscriptions.find(topic);
-  if ( it != conn.subscriptions.end() && !it->second.matching )
-    deliverToSubscription(it->second, payload);
-
-  // wildcard and shared subscriptions
-  bool sparkplugDone = false;
-  for (const auto &filter : conn.matchingFilters)
-  {
-    if ( !RsMqttAddress::topicMatches(filter, topic) ) continue;
-    auto s = conn.subscriptions.find(filter);
-    if ( s == conn.subscriptions.end() ) continue;
-    if ( s->second.sparkplugRefs > 0 )
-    {
-      if ( !sparkplugDone ) sparkplugMessage(conn, topic, payload);  // once per message
-      sparkplugDone = true;
-    }
-    deliverToSubscription(s->second, payload);  // other addresses on the filter (the plan skips Sparkplug ones)
-  }
-}
-
-//--------------------------------------------------------------------------------
-// Sparkplug B host application
-
 static int64_t nowMs()
 {
   return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -616,96 +483,59 @@ static TimeVar timeOfMs(int64_t ms)
   return TimeVar((time_t) sec, (PVSSshort) (ms - sec * 1000));
 }
 
-void RsMqttHWService::sparkplugMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
+void RsMqttHWService::apply(RsMqttConnection &conn, const rsmqtt::wincc::Router::Outcome &out, std::string_view payload)
 {
-  std::vector<RsMqttSparkplug::Update> updates;
-  std::vector<RsMqttSparkplug::Message> publish;
-  std::vector<std::string> warnings;
-  conn.spb.onMessage(topic, payload, nowMs(), updates, publish, warnings);
-  for (const auto &w : warnings)
-    log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] " + w);
-  for (const auto &m : publish)
+  for (const auto &w : out.warnings)
   {
-    try
-    {
-      if ( conn.client ) conn.client->publish(m.topic, m.payload, 0, false);  // commands: QoS 0
-    }
-    catch (const rsmqtt::Error &e)
-    {
-      log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] " + m.topic + ": " + e.what());
-    }
+    if ( w.first )
+      log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] " + w.second);
+    else
+      log(ErrClass::PRIO_WARNING, "deliver", w.second);
   }
-  sparkplugApply(conn, updates);
-}
-
-void RsMqttHWService::sparkplugApply(RsMqttConnection &conn, const std::vector<RsMqttSparkplug::Update> &updates)
-{
-  using Kind = RsMqttSparkplug::Update::Kind;
-  RsMqttConnections &conns = RsMqttConnections::instance();
-  for (const auto &u : updates)
+  if ( conn.client )
   {
-    auto k = conn.spbIndex.find(RsMqttConnection::spbKey(u.group, u.node, u.device, u.metric, u.kind == Kind::Online));
-    if ( k == conn.spbIndex.end() )
-      continue;
-    for (const auto &a : k->second)
+    for (const auto &s : out.subscribe)
     {
-      const std::string &address = a.first;
-      switch ( u.kind )
+      try
       {
-        case Kind::Value:
-        {
-          // dyn: a string stays one item, even if it looks like an array
-          const RsMqttAddress *addr = conns.parsed(address);
-          std::string text = addr && addr->dyn && u.isString ? RsMqttJson::quote(u.text) : u.text;
-          deliver(address, text, u.hasTime ? timeOfMs(u.timeMs) : TimeVar(), u.hasTime, 1);
-          conn.spbLast[address] = text;
-          break;
-        }
-        case Kind::Stale:
-        {
-          // the last value again, invalid (nothing to send before the first one)
-          auto last = conn.spbLast.find(address);
-          if ( last != conn.spbLast.end() )
-            deliver(address, last->second, TimeVar(), false, 2);
-          break;
-        }
-        case Kind::Online:
-          deliver(address, u.online ? "1" : "0", TimeVar(), false, 1);
-          break;
+        conn.client->subscribe(std::string(s.first), s.second);
+      }
+      catch (const rsmqtt::Error &e)
+      {
+        log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] subscribe '" + s.first + "': " + e.what());
+      }
+    }
+    for (const auto &p : out.publish)
+    {
+      try
+      {
+        conn.client->publish(p.topic, p.payload, p.qos, p.retain);
+      }
+      catch (const rsmqtt::Error &e)
+      {
+        log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] " + p.topic + ": " + e.what());
       }
     }
   }
+  for (const auto &d : out.deliveries)
+    deliver(d.address, d.hasValue ? d.value : payload, d.hasTime ? timeOfMs(d.timeMs) : TimeVar(), d.periphTime,
+            d.validity);
 }
+
+void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload)
+{
+  apply(conn, conn.router.message(topic, payload, nowMs(), conn.spbStateHost(), conn.settings.stateTs()), payload);
+}
+
+//--------------------------------------------------------------------------------
+// Sparkplug B host application
 
 void RsMqttHWService::sparkplugConnected(RsMqttConnection &conn)
 {
-  if ( !conn.client )
-    return;
-  // the host application is online: subscriptions first, then STATE (Sparkplug 3.0)
-  if ( !conn.spbStateHost().empty() )
-  {
-    std::string topic = RsMqttSparkplug::stateTopic(conn.spbStateHost());
-    try
-    {
-      conn.client->subscribe(topic, 1);
-      conn.client->publish(topic, RsMqttSparkplug::statePayload(true, conn.spbStateTs), 1, true);
-    }
-    catch (const rsmqtt::Error &e)
-    {
-      log(ErrClass::PRIO_WARNING, "sparkplug", "[" + conn.name + "] STATE: " + e.what());
-    }
-  }
+  // the host application is online: subscriptions first, then STATE (Sparkplug 3.0);
   // edge nodes and devices count as offline until their birth
-  for (const auto &k : conn.spbIndex)
-  {
-    if ( k.first.empty() || k.first.back() != '\x01' ) continue;  // online keys end with \x01
-    for (const auto &a : k.second)
-    {
-      const RsMqttAddress *addr = RsMqttConnections::instance().parsed(a.first);
-      if ( addr && !conn.spb.isOnline(addr->spbGroup, addr->spbNode, addr->spbDevice) )
-        deliver(a.first, "0", TimeVar(), false, 1);
-    }
-  }
+  if ( conn.client )
+    apply(conn, conn.router.connected(conn.spbStateHost(), conn.settings.stateTs()));
 }
 
 void RsMqttHWService::sparkplugGoodbye(RsMqttConnection &conn)
@@ -716,7 +546,7 @@ void RsMqttHWService::sparkplugGoodbye(RsMqttConnection &conn)
   try
   {
     conn.client->publish(RsMqttSparkplug::stateTopic(conn.spbStateHost()),
-                         RsMqttSparkplug::statePayload(false, conn.spbStateTs), 1, true);
+                         RsMqttSparkplug::statePayload(false, conn.settings.stateTs()), 1, true);
   }
   catch (const rsmqtt::Error &)
   {
@@ -725,16 +555,12 @@ void RsMqttHWService::sparkplugGoodbye(RsMqttConnection &conn)
 
 void RsMqttHWService::sparkplugOffline(RsMqttConnection &conn)
 {
-  std::vector<RsMqttSparkplug::Update> updates;
-  conn.spb.onConnectionLost(updates);
-  sparkplugApply(conn, updates);
+  apply(conn, conn.router.connectionLost());
 }
 
 void RsMqttHWService::pushState(RsMqttConnection &conn)
 {
-  const char *value = conn.connected ? "1" : "0";
-  for (const auto &a : conn.stateAddresses)
-    deliver(a.first, value);
+  apply(conn, conn.router.state(conn.connected));
 }
 
 //--------------------------------------------------------------------------------
@@ -770,12 +596,6 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
     log(ErrClass::PRIO_WARNING, "writeData", "no active MQTT connection for address '" + name + "'");
     return PVSS_FALSE;
   }
-  // (a Sparkplug metric's topic is its edge node's filter; it is written as NCMD / DCMD below)
-  if ( addr->isState || (RsMqttAddress::isWildcardFilter(addr->topic) && !(addr->sparkplug && !addr->spbOnline)) )
-  {
-    log(ErrClass::PRIO_WARNING, "writeData", "address '" + name + "' cannot be written");
-    return PVSS_FALSE;
-  }
 
   // RsMqttTrans::toPeriph: 4 byte little endian length + payload
   const PVSSchar *data = objPtr->getData();
@@ -791,74 +611,33 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
     log(ErrClass::PRIO_WARNING, "writeData", "corrupt data for address '" + name + "'");
     return PVSS_FALSE;
   }
+  std::string_view value(reinterpret_cast<const char *>(data + 4), n);
 
-  std::string_view payload(reinterpret_cast<const char *>(data + 4), n);
-
-  // Sparkplug: NCMD / DCMD with the data type of the metric's birth
-  if ( addr->sparkplug )
+  // topic, payload (json= / ts=, Sparkplug NCMD / DCMD), QoS and retain:
+  // crates/rsmqtt-wincc/src/router.rs (Router::write)
+  const TimeVar &tm = objPtr->getOrgTime();
+  int64_t timeMs = (int64_t) tm.getSeconds() * 1000 + tm.getMilli();
+  rsmqtt::wincc::Router::Write w;
+  std::string err;
+  if ( !conn->router.write(name, value, (int) objPtr->getType(), timeMs, nowMs(), conn->settings.publishQoS(),
+                           conn->settings.publishRetain(), w, err) )
   {
-    RsMqttSparkplug::Message cmd;
-    std::string err;
-    if ( addr->spbOnline || !conn->spb.command(addr->spbGroup, addr->spbNode, addr->spbDevice, addr->spbMetric,
-                                               payload, nowMs(), cmd, err) )
-    {
-      log(ErrClass::PRIO_WARNING, "writeData", "address '" + name + "': " + (addr->spbOnline ? "cannot be written" : err));
-      return PVSS_FALSE;
-    }
-    try
-    {
-      conn->client->publish(cmd.topic, cmd.payload, 0, false);  // commands: QoS 0, not retained
-      conn->messagesOut++;
-    }
-    catch (const rsmqtt::Error &e)
-    {
-      log(ErrClass::PRIO_WARNING, "writeData", "[" + conn->name + "] " + cmd.topic + ": " + e.what());
-      return PVSS_FALSE;
-    }
-    return PVSS_TRUE;
+    log(ErrClass::PRIO_WARNING, "writeData", err);
+    return PVSS_FALSE;
   }
 
-  std::string json;
-  if ( addr->json )
-  {
-    // numbers, bool and dyn (a JSON array) are JSON as RsMqttTrans writes
-    // them, text and blobs become strings
-    namespace T = RsMqttTransformationType;
-    TransformationType t = objPtr->getType();
-    bool plain = addr->dyn || (t >= T::Int32 && t <= T::Float) || t == T::Bool;
-    std::string value = plain ? std::string(payload) : RsMqttJson::quote(payload), timeValue;
-    std::vector<std::pair<std::string_view, std::string_view>> members;
-    members.emplace_back(addr->jsonPath, value);
-    if ( addr->hasTs )
-    {
-      const TimeVar &tm = objPtr->getOrgTime();
-      long long ms = (long long) tm.getSeconds() * 1000 + tm.getMilli();
-      timeValue = RsMqttJson::quote(RsMqttJson::isoTime(ms));
-      members.emplace_back(addr->tsPath, timeValue);
-    }
-    std::string err;
-    if ( !RsMqttJson::build(members, json, err) )
-    {
-      log(ErrClass::PRIO_WARNING, "writeData", "address '" + name + "': " + err);
-      return PVSS_FALSE;
-    }
-    payload = json;
-  }
-
-  int  qos = addr->qos >= 0 ? addr->qos : conn->publishQoS;
-  bool retain = addr->retain >= 0 ? addr->retain != 0 : conn->publishRetain;
-
-  if ( Resources::isDbgFlag(Resources::DBG_DRV_USR1) )
+  if ( !addr->sparkplug && Resources::isDbgFlag(Resources::DBG_DRV_USR1) )
     objPtr->debugPrint();
 
   try
   {
-    conn->client->publish(addr->topic, payload, qos, retain);
+    conn->client->publish(w.topic, w.payload, w.qos, w.retain);
     conn->messagesOut++;
   }
   catch (const rsmqtt::Error &e)
   {
-    log(ErrClass::PRIO_WARNING, "writeData", "[" + conn->name + "] publish to '" + addr->topic + "' failed: " + e.what());
+    log(ErrClass::PRIO_WARNING, "writeData", "[" + conn->name + "] " +
+        (addr->sparkplug ? w.topic + ": " : "publish to '" + w.topic + "' failed: ") + e.what());
     return PVSS_FALSE;
   }
   return PVSS_TRUE;

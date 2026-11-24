@@ -12,11 +12,11 @@
 #![allow(clippy::missing_safety_doc)]
 
 use std::cell::RefCell;
-use std::ffi::{c_char, c_int, CStr, CString};
+use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
-use crate::{address, json, redu, sparkplug};
+use crate::{address, json, redu, router, settings, sparkplug, values};
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
@@ -57,6 +57,10 @@ unsafe fn text<'a>(p: *const c_char) -> std::borrow::Cow<'a, str> {
 
 fn cstring(s: &str) -> CString {
     CString::new(s.replace('\0', " ")).unwrap_or_default()
+}
+
+fn owned_cstring(s: String) -> CString {
+    CString::new(s).unwrap_or_else(|e| cstring(&String::from_utf8_lossy(&e.into_vec())))
 }
 
 //------------------------------------------------------------------------ buffers
@@ -623,4 +627,611 @@ pub unsafe extern "C" fn rsmqtt_wincc_spb_state_payload(online: c_int, timestamp
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_spb_valid_id(id: *const c_char) -> c_int {
     guard(0, || Ok(sparkplug::valid_id(&text(id)) as c_int))
+}
+
+//----------------------------------------------------------------------- settings
+
+/// Text as (pointer, length), not NUL-terminated.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct RsmqttWinccStr {
+    pub data: *const c_char,
+    pub len: usize,
+}
+
+/// The `Config.*` elements of a `_RsMqttBroker` DP.
+#[repr(C)]
+pub struct RsmqttWinccBrokerConfig {
+    pub server_uri: RsmqttWinccStr,
+    pub server_uris: *const RsmqttWinccStr,
+    pub server_uris_len: usize,
+    pub client_id: RsmqttWinccStr,
+    pub mqtt_version: c_int,
+    pub keep_alive: c_int,
+    pub clean_session: c_int,
+    pub username: RsmqttWinccStr,
+    pub password: RsmqttWinccStr,
+    pub tls_trust_store: RsmqttWinccStr,
+    pub tls_key_store: RsmqttWinccStr,
+    pub tls_private_key: RsmqttWinccStr,
+    pub tls_verify: c_int,
+    pub will_topic: RsmqttWinccStr,
+    pub will_payload: RsmqttWinccStr,
+    pub will_qos: c_int,
+    pub will_retain: c_int,
+    pub subscribe_qos: c_int,
+    pub publish_qos: c_int,
+    pub publish_retain: c_int,
+    pub options: *const RsmqttWinccStr,
+    pub options_len: usize,
+}
+
+/// Decrypts a stored password: 0 and `*out` = the plain text, or -1 and
+/// `*out` = why it failed (allocate `*out` with rsmqtt_wincc_buf_new).
+pub type RsmqttWinccRevealFn =
+    Option<unsafe extern "C" fn(ctx: *mut c_void, stored: *const c_char, len: usize, out: *mut RsmqttWinccBuf) -> c_int>;
+
+pub type RsmqttWinccSettings = settings::Settings;
+
+pub const SETTINGS_SUBSCRIBE_QOS: c_int = 0;
+pub const SETTINGS_PUBLISH_QOS: c_int = 1;
+pub const SETTINGS_PUBLISH_RETAIN: c_int = 2;
+pub const SETTINGS_RECONNECT_INTERVAL_MS: c_int = 3;
+pub const SETTINGS_AUTO_RECONNECT: c_int = 4;
+pub const SETTINGS_STATE_TS: c_int = 5;
+
+/// A buffer with a copy of `data` (for callbacks that return a buffer).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_buf_new(data: *const c_char, len: usize) -> RsmqttWinccBuf {
+    buf(bytes(data, len).to_vec())
+}
+
+unsafe fn take_buf(b: RsmqttWinccBuf) -> Vec<u8> {
+    if b.data.is_null() {
+        return Vec::new();
+    }
+    Box::from_raw(ptr::slice_from_raw_parts_mut(b.data as *mut u8, b.len)).into_vec()
+}
+
+unsafe fn utf8(s: RsmqttWinccStr, what: &str) -> Result<String, String> {
+    String::from_utf8(bytes(s.data, s.len).to_vec()).map_err(|_| format!("{what} is not valid UTF-8"))
+}
+
+unsafe fn utf8_list(p: *const RsmqttWinccStr, n: usize, what: &str) -> Result<Vec<String>, String> {
+    if n == 0 {
+        return Ok(Vec::new());
+    }
+    if p.is_null() {
+        return Err(format!("{what}: null list"));
+    }
+    std::slice::from_raw_parts(p, n).iter().map(|s| utf8(*s, what)).collect()
+}
+
+unsafe fn broker_config(c: &RsmqttWinccBrokerConfig) -> Result<settings::BrokerConfig, String> {
+    Ok(settings::BrokerConfig {
+        server_uri: utf8(c.server_uri, "Config.ServerURI")?,
+        server_uris: utf8_list(c.server_uris, c.server_uris_len, "Config.ServerURIs")?,
+        client_id: utf8(c.client_id, "Config.ClientId")?,
+        mqtt_version: c.mqtt_version,
+        keep_alive: c.keep_alive,
+        clean_session: c.clean_session != 0,
+        username: utf8(c.username, "Config.Username")?,
+        password: utf8(c.password, "Config.Password")?,
+        tls_trust_store: utf8(c.tls_trust_store, "Config.TlsTrustStore")?,
+        tls_key_store: utf8(c.tls_key_store, "Config.TlsKeyStore")?,
+        tls_private_key: utf8(c.tls_private_key, "Config.TlsPrivateKey")?,
+        tls_verify: c.tls_verify != 0,
+        will_topic: utf8(c.will_topic, "Config.WillTopic")?,
+        will_payload: utf8(c.will_payload, "Config.WillPayload")?,
+        will_qos: c.will_qos,
+        will_retain: c.will_retain != 0,
+        subscribe_qos: c.subscribe_qos,
+        publish_qos: c.publish_qos,
+        publish_retain: c.publish_retain != 0,
+        options: utf8_list(c.options, c.options_len, "Config.Options")?,
+    })
+}
+
+/// The driver's default settings of a connection.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_new(name: *const c_char, man_num: c_int) -> *mut RsmqttWinccSettings {
+    guard(ptr::null_mut(), || Ok(Box::into_raw(Box::new(settings::Settings::new(&text(name), man_num)))))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_free(s: *mut RsmqttWinccSettings) {
+    if !s.is_null() {
+        drop(Box::from_raw(s));
+    }
+}
+
+/// A number or flag (RSMQTT_WINCC_SETTINGS_SUBSCRIBE_QOS ...); 0 for an unknown field.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_get(s: *const RsmqttWinccSettings, field: c_int) -> i64 {
+    let Some(s) = s.as_ref() else { return 0 };
+    match field {
+        SETTINGS_SUBSCRIBE_QOS => s.subscribe_qos as i64,
+        SETTINGS_PUBLISH_QOS => s.publish_qos as i64,
+        SETTINGS_PUBLISH_RETAIN => s.publish_retain as i64,
+        SETTINGS_RECONNECT_INTERVAL_MS => s.reconnect_interval_ms,
+        SETTINGS_AUTO_RECONNECT => s.auto_reconnect() as i64,
+        SETTINGS_STATE_TS => s.state_ts(),
+        _ => 0,
+    }
+}
+
+/// Sets SUBSCRIBE_QOS, PUBLISH_QOS, PUBLISH_RETAIN or RECONNECT_INTERVAL_MS
+/// (config file); -1 for other fields.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_set(s: *mut RsmqttWinccSettings, field: c_int, value: i64) -> c_int {
+    guard(-1, || {
+        let s = s.as_mut().ok_or("null settings")?;
+        match field {
+            SETTINGS_SUBSCRIBE_QOS => s.subscribe_qos = value as i32,
+            SETTINGS_PUBLISH_QOS => s.publish_qos = value as i32,
+            SETTINGS_PUBLISH_RETAIN => s.publish_retain = value != 0,
+            SETTINGS_RECONNECT_INTERVAL_MS => s.reconnect_interval_ms = value,
+            _ => return Err(format!("settings field {field} cannot be set")),
+        }
+        Ok(0)
+    })
+}
+
+/// Sets an rsmqtt option (config file).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_set_option(
+    s: *mut RsmqttWinccSettings,
+    name: *const c_char,
+    value: *const c_char,
+    len: usize,
+) -> c_int {
+    guard(-1, || {
+        let s = s.as_mut().ok_or("null settings")?;
+        let v = utf8(RsmqttWinccStr { data: value, len }, "option value")?;
+        s.set_option(&text(name), &v)?;
+        Ok(0)
+    })
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_set_spb_host_id(s: *mut RsmqttWinccSettings, id: *const c_char) -> c_int {
+    guard(-1, || {
+        s.as_mut().ok_or("null settings")?.set_spb_host_id(&text(id))?;
+        Ok(0)
+    })
+}
+
+/// A "redu.<option>" entry (option without "redu."): set on host 2, checked on host 1.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_apply_redu_option(
+    s: *mut RsmqttWinccSettings,
+    option: *const c_char,
+    value: *const c_char,
+    len: usize,
+    host2: c_int,
+) -> c_int {
+    guard(-1, || {
+        let s = s.as_mut().ok_or("null settings")?;
+        let v = utf8(RsmqttWinccStr { data: value, len }, "option value")?;
+        s.apply_redu_option(&text(option), &v, host2 != 0)?;
+        Ok(0)
+    })
+}
+
+/// Builds the settings from a broker DP; on failure (-1) they stay as they were.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_apply_broker_config(
+    s: *mut RsmqttWinccSettings,
+    cfg: *const RsmqttWinccBrokerConfig,
+    host2: c_int,
+    reveal: RsmqttWinccRevealFn,
+    ctx: *mut c_void,
+) -> c_int {
+    guard(-1, || {
+        let s = s.as_mut().ok_or("null settings")?;
+        let cfg = broker_config(cfg.as_ref().ok_or("null config")?)?;
+        let mut call = |stored: &str| -> Result<String, String> {
+            let Some(f) = reveal else { return Ok(stored.to_string()) };
+            let mut out = RsmqttWinccBuf { data: ptr::null_mut(), len: 0 };
+            let rc = f(ctx, stored.as_ptr() as *const c_char, stored.len(), &mut out);
+            let v = take_buf(out);
+            if rc == 0 {
+                String::from_utf8(v).map_err(|_| "the decrypted password is not valid UTF-8".to_string())
+            } else {
+                Err(String::from_utf8_lossy(&v).into_owned())
+            }
+        };
+        s.apply_broker_config(&cfg, host2 != 0, &mut call)?;
+        Ok(0)
+    })
+}
+
+/// The Sparkplug host id this driver publishes STATE for ("" for none).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_spb_state_host(
+    s: *const RsmqttWinccSettings,
+    host2: c_int,
+    out: *mut RsmqttWinccBuf,
+) -> c_int {
+    guard(-1, || Ok(put(out, s.as_ref().ok_or("null settings")?.spb_state_host(host2 != 0).as_bytes().to_vec())))
+}
+
+/// The options to create the client with (an rsmqtt_options handle, free it
+/// with rsmqtt_options_free); `warnings` gets the warnings for the log, one
+/// per line (may be empty).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_settings_client_options(
+    s: *mut RsmqttWinccSettings,
+    host2: c_int,
+    data_dir: *const c_char,
+    now_ms: i64,
+    warnings: *mut RsmqttWinccBuf,
+) -> *mut rsmqtt::RsmqttOptions {
+    guard(ptr::null_mut(), || {
+        let s = s.as_mut().ok_or("null settings")?;
+        let (o, w) = s.client_options(host2 != 0, &text(data_dir), now_ms);
+        if !warnings.is_null() {
+            put(warnings, w.join("\n").into_bytes());
+        }
+        Ok(Box::into_raw(Box::new(o)))
+    })
+}
+
+/// 1 if the value of this option may be encrypted (password).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_is_secret_option(name: *const c_char) -> c_int {
+    guard(0, || Ok(settings::is_secret_option(&text(name)) as c_int))
+}
+
+//------------------------------------------------------------------------- router
+
+/// One value of rsmqtt_wincc_router_delivery_get (pointers valid until the
+/// next call that changes the router).
+#[repr(C)]
+pub struct RsmqttWinccDelivery {
+    pub address: *const c_char,
+    /// 0: the payload of the message as it is
+    pub has_value: c_int,
+    pub value: *const c_char,
+    pub value_len: usize,
+    /// 0: now
+    pub has_time: c_int,
+    pub time_ms: i64,
+    pub periph_time: c_int,
+    /// 0 keep, 1 valid, 2 invalid
+    pub validity: c_int,
+}
+
+#[repr(C)]
+pub struct RsmqttWinccPublish {
+    pub topic: *const c_char,
+    pub payload: *const c_char,
+    pub payload_len: usize,
+    pub qos: c_int,
+    pub retain: c_int,
+}
+
+pub struct RsmqttWinccRouter {
+    r: router::Router,
+    deliveries: Vec<(CString, router::Delivery)>,
+    publish: Vec<(CString, router::Publish)>,
+    subscribe: Vec<(CString, c_int)>,
+    warnings: Vec<(CString, bool)>,
+}
+
+impl RsmqttWinccRouter {
+    fn keep(&mut self, o: router::Outcome) {
+        // the strings move into the CStrings (no copies: one message may have many deliveries)
+        self.deliveries = o.deliveries.into_iter().map(|mut d| (owned_cstring(std::mem::take(&mut d.address)), d)).collect();
+        self.publish = o.publish.into_iter().map(|mut p| (owned_cstring(std::mem::take(&mut p.topic)), p)).collect();
+        self.subscribe = o.subscribe.into_iter().map(|(t, q)| (owned_cstring(t), q)).collect();
+        self.warnings = o.warnings.into_iter().map(|w| (owned_cstring(w.text), w.sparkplug)).collect();
+    }
+
+    /// Before each call: a call that fails (panic) must not leave the
+    /// results of the previous one to be applied again.
+    fn forget(&mut self) {
+        self.deliveries.clear();
+        self.publish.clear();
+        self.subscribe.clear();
+        self.warnings.clear();
+    }
+}
+
+unsafe fn router_call<F: FnOnce(&mut router::Router) -> router::Outcome>(r: *mut RsmqttWinccRouter, f: F) {
+    guard((), || {
+        let r = r.as_mut().ok_or("null router")?;
+        r.forget();
+        let o = f(&mut r.r);
+        r.keep(o);
+        Ok(())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn rsmqtt_wincc_router_new() -> *mut RsmqttWinccRouter {
+    Box::into_raw(Box::new(RsmqttWinccRouter {
+        r: router::Router::new(),
+        deliveries: vec![],
+        publish: vec![],
+        subscribe: vec![],
+        warnings: vec![],
+    }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_free(r: *mut RsmqttWinccRouter) {
+    if !r.is_null() {
+        drop(Box::from_raw(r));
+    }
+}
+
+/// Registers an address: 0 nothing to do, 1 a $state address (write the
+/// state), 2 subscribe `*filter`; -1 and rsmqtt_wincc_last_error() if the
+/// address is not valid.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_add(
+    r: *mut RsmqttWinccRouter,
+    full: *const c_char,
+    is_dyn: c_int,
+    input: c_int,
+    default_qos: c_int,
+    filter: *mut RsmqttWinccBuf,
+) -> c_int {
+    guard(-1, || {
+        let r = r.as_mut().ok_or("null router")?;
+        Ok(match r.r.add(&text(full), is_dyn != 0, input != 0, default_qos)? {
+            router::Added::Nothing => 0,
+            router::Added::State => 1,
+            router::Added::Subscribe(f) => {
+                put(filter, f.into_bytes());
+                2
+            }
+        })
+    })
+}
+
+/// Unregisters an address: 1 and `*filter` to unsubscribe, else 0.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_remove(
+    r: *mut RsmqttWinccRouter,
+    full: *const c_char,
+    input: c_int,
+    filter: *mut RsmqttWinccBuf,
+) -> c_int {
+    guard(0, || {
+        let r = r.as_mut().ok_or("null router")?;
+        Ok(match r.r.remove(&text(full), input != 0) {
+            Some(f) => {
+                put(filter, f.into_bytes());
+                1
+            }
+            None => 0,
+        })
+    })
+}
+
+/// 1 and QoS / flags of a subscription, 0 if there is none for this filter.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_filter(
+    r: *const RsmqttWinccRouter,
+    filter: *const c_char,
+    qos: *mut c_int,
+    flags: *mut c_int,
+) -> c_int {
+    guard(0, || {
+        let r = r.as_ref().ok_or("null router")?;
+        let Some(f) = r.r.filter(&text(filter)) else { return Ok(0) };
+        if let Some(q) = qos.as_mut() {
+            *q = f.qos;
+        }
+        if let Some(x) = flags.as_mut() {
+            *x = f.flags;
+        }
+        Ok(1)
+    })
+}
+
+/// All subscription filters, each followed by a NUL byte.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_filters(r: *const RsmqttWinccRouter, out: *mut RsmqttWinccBuf) -> c_int {
+    guard(-1, || {
+        let r = r.as_ref().ok_or("null router")?;
+        let mut v = Vec::new();
+        for f in r.r.filters() {
+            v.extend_from_slice(f.as_bytes());
+            v.push(0);
+        }
+        Ok(put(out, v))
+    })
+}
+
+/// 1 if there are addresses that need a broker (subscriptions or $state).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_has_addresses(r: *const RsmqttWinccRouter) -> c_int {
+    r.as_ref().map_or(0, |r| r.r.has_addresses() as c_int)
+}
+
+/// One message (results: rsmqtt_wincc_router_*_count / _get).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_message(
+    r: *mut RsmqttWinccRouter,
+    topic: *const c_char,
+    payload: *const c_char,
+    len: usize,
+    now_ms: i64,
+    state_host: *const c_char,
+    state_ts: i64,
+) {
+    let (t, h) = (text(topic), text(state_host));
+    router_call(r, |r| r.message(&t, bytes(payload, len), now_ms, &h, state_ts))
+}
+
+/// The values of the $state addresses.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_state(r: *mut RsmqttWinccRouter, connected: c_int) {
+    router_call(r, |r| r.state(connected != 0))
+}
+
+/// The connection is established (Sparkplug STATE, edge nodes offline until their birth).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_connected(r: *mut RsmqttWinccRouter, state_host: *const c_char, state_ts: i64) {
+    let h = text(state_host);
+    router_call(r, |r| r.connected(&h, state_ts))
+}
+
+/// The connection is gone: Sparkplug edge nodes offline, metrics stale.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_connection_lost(r: *mut RsmqttWinccRouter) {
+    router_call(r, |r| r.connection_lost())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_delivery_count(r: *const RsmqttWinccRouter) -> usize {
+    r.as_ref().map_or(0, |r| r.deliveries.len())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_delivery_get(r: *const RsmqttWinccRouter, i: usize, out: *mut RsmqttWinccDelivery) -> c_int {
+    let (Some(r), Some(out)) = (r.as_ref(), out.as_mut()) else { return -1 };
+    let Some((a, d)) = r.deliveries.get(i) else { return -1 };
+    let (has_value, value, value_len) = match &d.value {
+        Some(v) => (1, v.as_ptr() as *const c_char, v.len()),
+        None => (0, c"".as_ptr(), 0),
+    };
+    *out = RsmqttWinccDelivery {
+        address: a.as_ptr(),
+        has_value,
+        value,
+        value_len,
+        has_time: d.time_ms.is_some() as c_int,
+        time_ms: d.time_ms.unwrap_or(0),
+        periph_time: d.periph_time as c_int,
+        validity: d.validity as c_int,
+    };
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_publish_count(r: *const RsmqttWinccRouter) -> usize {
+    r.as_ref().map_or(0, |r| r.publish.len())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_publish_get(r: *const RsmqttWinccRouter, i: usize, out: *mut RsmqttWinccPublish) -> c_int {
+    let (Some(r), Some(out)) = (r.as_ref(), out.as_mut()) else { return -1 };
+    let Some((t, p)) = r.publish.get(i) else { return -1 };
+    *out = RsmqttWinccPublish {
+        topic: t.as_ptr(),
+        payload: p.payload.as_ptr() as *const c_char,
+        payload_len: p.payload.len(),
+        qos: p.qos,
+        retain: p.retain as c_int,
+    };
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_subscribe_count(r: *const RsmqttWinccRouter) -> usize {
+    r.as_ref().map_or(0, |r| r.subscribe.len())
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_subscribe_get(
+    r: *const RsmqttWinccRouter,
+    i: usize,
+    filter: *mut *const c_char,
+    qos: *mut c_int,
+) -> c_int {
+    let Some((f, q)) = r.as_ref().and_then(|r| r.subscribe.get(i)) else { return -1 };
+    if let Some(x) = filter.as_mut() {
+        *x = f.as_ptr();
+    }
+    if let Some(x) = qos.as_mut() {
+        *x = *q;
+    }
+    0
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_warning_count(r: *const RsmqttWinccRouter) -> usize {
+    r.as_ref().map_or(0, |r| r.warnings.len())
+}
+
+/// Warning i ("" if out of range); `*sparkplug` = 1 for one of the Sparkplug host application.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_warning_get(r: *const RsmqttWinccRouter, i: usize, sparkplug: *mut c_int) -> *const c_char {
+    let Some((w, s)) = r.as_ref().and_then(|r| r.warnings.get(i)) else { return c"".as_ptr() };
+    if let Some(x) = sparkplug.as_mut() {
+        *x = *s as c_int;
+    }
+    w.as_ptr()
+}
+
+/// The message that writes `value` (payload text of data type `value_type`)
+/// to an output address: 0 and topic / payload / QoS / retain, or -1 and
+/// rsmqtt_wincc_last_error() (the message for the log).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_write(
+    r: *const RsmqttWinccRouter,
+    full: *const c_char,
+    value: *const c_char,
+    len: usize,
+    value_type: c_int,
+    time_ms: i64,
+    now_ms: i64,
+    publish_qos: c_int,
+    publish_retain: c_int,
+    topic: *mut RsmqttWinccBuf,
+    payload: *mut RsmqttWinccBuf,
+    qos: *mut c_int,
+    retain: *mut c_int,
+) -> c_int {
+    guard(-1, || {
+        let r = r.as_ref().ok_or("null router")?;
+        let p = r.r.write(&text(full), bytes(value, len), value_type, time_ms, now_ms, publish_qos, publish_retain != 0)?;
+        if let Some(q) = qos.as_mut() {
+            *q = p.qos;
+        }
+        if let Some(x) = retain.as_mut() {
+            *x = p.retain as c_int;
+        }
+        put(topic, p.topic.into_bytes());
+        Ok(put(payload, p.payload))
+    })
+}
+
+//------------------------------------------------------------------------- values
+
+/// A number or boolean of rsmqtt_wincc_parse_number: the field of its type is set.
+#[repr(C)]
+pub struct RsmqttWinccNumber {
+    pub i: i64,
+    pub u: u64,
+    pub f: f64,
+    pub b: c_int,
+}
+
+/// A value of data type `type` (1002 int32 .. 1007 bool) from payload text;
+/// `json_string`: the text came from a JSON string. 0, or -1 and
+/// rsmqtt_wincc_last_error() (why it cannot be converted).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_parse_number(
+    value_type: c_int,
+    text: *const c_char,
+    len: usize,
+    json_string: c_int,
+    out: *mut RsmqttWinccNumber,
+) -> c_int {
+    guard(-1, || {
+        let out = out.as_mut().ok_or("null output")?;
+        *out = RsmqttWinccNumber { i: 0, u: 0, f: 0.0, b: 0 };
+        match values::parse_number(value_type, bytes(text, len), json_string != 0)? {
+            values::Number::Int(v) => out.i = v,
+            values::Number::UInt(v) => out.u = v,
+            values::Number::Float(v) => out.f = v,
+            values::Number::Bool(v) => out.b = v as c_int,
+        }
+        Ok(0)
+    })
 }

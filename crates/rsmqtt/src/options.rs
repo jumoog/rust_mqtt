@@ -479,6 +479,15 @@ impl OptionsData {
         Ok(())
     }
 
+    /// TRUE if `serverURI` or one of `serverURIs` is a TLS transport
+    /// (ssl://, tls://, mqtts://, wss://): the connection gets TLS options.
+    pub fn has_secure_uri(&self) -> bool {
+        self.server_uri
+            .iter()
+            .chain(self.server_uris.iter())
+            .any(|u| mqtt::is_secure_uri(u))
+    }
+
     /// The effective MQTT version, or `None` for the library default (v5).
     pub fn version(&self) -> MqttVersion {
         self.mqtt_version.unwrap_or_default()
@@ -606,12 +615,7 @@ impl OptionsData {
             ));
         }
 
-        let secure = self
-            .server_uri
-            .iter()
-            .chain(self.server_uris.iter())
-            .any(|u| mqtt::is_secure_uri(u));
-        if self.ssl.used || secure {
+        if self.ssl.used || self.has_secure_uri() {
             b.tls_options(self.tls_options());
         }
 

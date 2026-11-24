@@ -12,19 +12,16 @@
 #define RSMQTT_CONNECTIONS_HXX
 
 #include "RsMqttAddress.hxx"
-#include "RsMqttJson.hxx"
-#include "RsMqttSparkplug.hxx"
 #include <rsmqtt.hpp>
 
 #include <chrono>
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
 class RsMqttBrokerIntDp;
-struct RsMqttBrokerConfig;
+using RsMqttBrokerConfig = rsmqtt::wincc::BrokerConfig;
 
 class RsMqttConnection
 {
@@ -33,34 +30,17 @@ class RsMqttConnection
 
     explicit RsMqttConnection(const std::string &name);
 
-    /// The driver's default options for a connection of this name.
-    static rsmqtt::Options defaultOptions(const std::string &name);
-    /// "WCCOArsmqtt_<num>_<name>"
-    static std::string defaultClientId(const std::string &name);
-
     // ----- configuration
     std::string     name;
     Source          source = Source::Placeholder;
-    rsmqtt::Options options;          // effective rsmqtt options
-    int             subscribeQoS = 1; // default QoS of input addresses
-    int             publishQoS = 1;   // default QoS of output addresses
-    bool            publishRetain = false;
-    std::chrono::milliseconds reconnectInterval{10000};  // retry of failed connects
-    std::string     clientId;         // as configured; host 2 connects with "<clientId>_2"
-    bool            reduClientId = false;  // redu.clientId given: host 2 uses it as it is
-    std::string     spbHostId;        // sparkplug.hostId: STATE messages and will of the host application
-    std::string     spbReduHostId;    // redu.sparkplug.hostId: the second redundant host's own host id
-    bool            willTopicSet = false;  // a will is configured (replaced by the STATE will)
+    /// rsmqtt options, default QoS / retain, reconnect interval, Sparkplug host ids
+    /// (crates/rsmqtt-wincc/src/settings.rs)
+    rsmqtt::wincc::Settings settings;
 
-    /// The host id this driver publishes STATE for ("" for none). Two
-    /// redundant drivers must not share one: each has its own will and STATE
-    /// timestamp, and edge nodes ignore STATE older than the last one. So
-    /// host 1 uses sparkplug.hostId and host 2 only redu.sparkplug.hostId
-    /// (without it, host 2 reads and writes but is no primary host).
-    const std::string &spbStateHost() const;
-    int             persistence = -1; // explicit persistence=: -1 not set, 0 none/memory, 1 file
-    bool            persistenceDirSet = false;
-    std::string     persistenceDir;
+    /// The host id the current client publishes STATE for ("" for none):
+    /// sparkplug.hostId on host 1, redu.sparkplug.hostId on host 2 (see
+    /// Settings::spb_state_host); taken over by clientOptions().
+    const std::string &spbStateHost() const { return spbHost; }
 
     // ----- datapoint configuration
     RsMqttBrokerIntDp *brokerDp = nullptr;  // owned by RsMqttConnections (releaseBrokerDp)
@@ -69,31 +49,26 @@ class RsMqttConnection
     std::chrono::steady_clock::time_point dirtySince{};
     bool reconnectRequested = false;
 
-    /// Builds `options` and the driver settings from a broker DP.
+    /// Builds the settings from a broker DP (decrypting passwords); on failure
+    /// they stay as they were.
     bool applyBrokerConfig(const RsMqttBrokerConfig &cfg, std::string &err);
 
-    /// Remembers settings the driver itself must know about (automaticReconnect,
-    /// persistence). Call it for every option set on `options`.
-    void noteOption(const std::string &name, const std::string &value);
-
-    /// `options` as the client gets them: file persistence goes to
+    /// The options the client is created with: file persistence goes to
     /// <project>/data/rsmqtt, or to a relative persistenceDir under <project>/data;
-    /// on the second redundant host the client id gets "_2".
-    rsmqtt::Options clientOptions() const;
+    /// on the second redundant host the client id gets "_2"; a Sparkplug host
+    /// application gets its STATE will (new timestamp: settings.stateTs()).
+    rsmqtt::Options clientOptions();
 
-    /// A "redu.<option>" entry: on the second redundant host it sets <option>,
-    /// on host 1 it is only checked. Throws rsmqtt::Error for an unknown option.
-    void applyReduOption(const std::string &option, const std::string &value);
+  private:
+    std::string spbHost;
 
-    /// Options whose value may be encrypted with _DriverSecurity.PublicKey (see RsMqttSecret.hxx).
-    static bool isSecretOption(const std::string &name);
+  public:
 
     // ----- runtime
     std::unique_ptr<rsmqtt::Client> client;
     bool connected = false;
     bool connecting = false;
     bool everConnected = false;   // since the client was created
-    bool autoReconnect = true;    // library reconnects lost connections itself
     bool configError = false;     // configuration / client creation failed
     bool statePushNeeded = false; // a $state address was added
     bool stopped = false;         // HWService::stop() closed the client on purpose
@@ -108,47 +83,9 @@ class RsMqttConnection
     bool isActive() const;  // should have a running client
     int  connState() const; // RsMqttConnState
 
-    struct Subscription
-    {
-      int  qos = 0;
-      int  flags = 0;
-      bool matching = false;                // wildcard / shared filter
-      int  sparkplugRefs = 0;               // Sparkplug addresses on this edge node's filter: messages go to `spb`
-                                            // (other addresses on the same filter get the raw payload)
-      std::map<std::string, int> addresses; // full address -> reference count
-
-      /// How a message is handed to the addresses: built from `addresses`
-      /// when they change (planDirty), so that a message needs no address
-      /// lookups and one pass over its JSON for all json= / ts= paths.
-      struct Delivery
-      {
-        std::string address;
-        bool json = false;
-        bool dyn = false;
-        int  valueId = -1;  // extractor result of json=<path>
-        int  tsId = -1;     // extractor result of ts=<path>
-        std::string jsonPath, tsPath;  // for messages
-      };
-      std::vector<Delivery> plan;
-      RsMqttJson::Extractor extractor;
-      bool planDirty = true;
-    };
-
-    std::map<std::string, Subscription> subscriptions;   // filter -> subscription
-    std::set<std::string>               matchingFilters; // subset needing topic matching
-    std::map<std::string, int>          stateAddresses;  // "$state" addresses -> ref count
-
-    // ----- Sparkplug B host application (RsMqttSparkplug.hxx)
-    RsMqttSparkplug::Host spb;
-    mutable int64_t spbStateTs = 0;   // timestamp of this client's STATE messages (online and will)
-    std::map<std::string, std::map<std::string, int>> spbIndex;  // spbKey -> input addresses -> ref count
-    std::map<std::string, std::string> spbLast;  // address -> last value, sent again as invalid when stale
-    static std::string spbKey(const std::string &group, const std::string &node, const std::string &device,
-                              const std::string &metric, bool online);
-    static std::string spbKey(const RsMqttAddress &a)
-    {
-      return spbKey(a.spbGroup, a.spbNode, a.spbDevice, a.spbMetric, a.spbOnline);
-    }
+    /// Addresses, subscriptions, $state addresses and the Sparkplug B host
+    /// application (crates/rsmqtt-wincc/src/router.rs)
+    rsmqtt::wincc::Router router;
     std::map<rsmqtt::Token, std::vector<std::string>> subscribeTokens; // pending SUBSCRIBEs
 
     /// Sends SUBSCRIBE for the given filters (batched). No-op while not connected.

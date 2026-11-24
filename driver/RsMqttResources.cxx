@@ -51,33 +51,22 @@ void RsMqttResources::init(int &argc, char *argv[])
       cfgError(CharString("connection '") + p.connection->name.c_str() + "', " + p.name.c_str() + ": " + err.c_str());
       continue;
     }
-    try
-    {
-      p.connection->options.set(p.name, plain);
-    }
-    catch (const rsmqtt::Error &e)
-    {
-      cfgError(CharString("connection '") + p.connection->name.c_str() + "': " + e.what());
-    }
+    if ( !p.connection->settings.setOption(p.name, plain, err) )
+      cfgError(CharString("connection '") + p.connection->name.c_str() + "': " + err.c_str());
   }
   pendingSecrets.clear();
 
   for (auto &p : pendingRedu)
   {
     std::string value = p.value, err;
-    if ( RsMqttRedu::isHost2() && RsMqttConnection::isSecretOption(p.name) && !RsMqttSecret::reveal(p.value, value, err) )
+    if ( RsMqttRedu::isHost2() && rsmqtt::wincc::Settings::isSecretOption(p.name) &&
+         !RsMqttSecret::reveal(p.value, value, err) )
     {
       cfgError(CharString("connection '") + p.connection->name.c_str() + "', redu." + p.name.c_str() + ": " + err.c_str());
       continue;
     }
-    try
-    {
-      p.connection->applyReduOption(p.name, value);
-    }
-    catch (const rsmqtt::Error &e)
-    {
-      cfgError(CharString("connection '") + p.connection->name.c_str() + "': " + e.what());
-    }
+    if ( !p.connection->settings.applyReduOption(p.name, value, RsMqttRedu::isHost2(), err) )
+      cfgError(CharString("connection '") + p.connection->name.c_str() + "': " + err.c_str());
   }
   pendingRedu.clear();
 
@@ -139,30 +128,37 @@ PVSSboolean RsMqttResources::readSection()
         RsMqttRedu::simulateHost(host);
     }
     else if ( current && kw.icmp("subscribeQoS") == 0 )
-      getCfgStream() >> current->subscribeQoS;
+    {
+      int q = 1;
+      getCfgStream() >> q;
+      current->settings.setSubscribeQoS(q);
+    }
     else if ( current && kw.icmp("publishQoS") == 0 )
-      getCfgStream() >> current->publishQoS;
+    {
+      int q = 1;
+      getCfgStream() >> q;
+      current->settings.setPublishQoS(q);
+    }
     else if ( current && kw.icmp("publishRetain") == 0 )
     {
       int b = 0;
       getCfgStream() >> b;
-      current->publishRetain = (b != 0);
+      current->settings.setPublishRetain(b != 0);
     }
     else if ( current && kw.icmp("reconnectInterval") == 0 )
     {
       double s = 10;
       getCfgStream() >> s;
       if ( s < 0.1 ) s = 0.1;
-      current->reconnectInterval = std::chrono::milliseconds((long long) (s * 1000));
+      current->settings.setReconnectInterval(std::chrono::milliseconds((long long) (s * 1000)));
     }
     else if ( current && kw.icmp("sparkplug.hostId") == 0 )
     {
       CharString value;
       getCfgStream() >> value;
-      if ( value.len() && !RsMqttSparkplug::validId((const char *) value) )
-        cfgError(CharString("connection '") + current->name.c_str() + "': sparkplug.hostId must not contain / + #");
-      else
-        current->spbHostId = (const char *) value;
+      std::string err;
+      if ( !current->settings.setSpbHostId((const char *) value, err) )
+        cfgError(CharString("connection '") + current->name.c_str() + "': " + err.c_str());
     }
     else if ( std::string reduName; RsMqttRedu::splitReduOption((const char *) kw, reduName) )
     {
@@ -180,22 +176,16 @@ PVSSboolean RsMqttResources::readSection()
       getCfgStream() >> value;
       if ( !current )
         cfgError(CharString("'") + kw + "' must follow a 'connection = \"<name>\"' entry");
-      else if ( RsMqttConnection::isSecretOption((const char *) kw) )
+      else if ( rsmqtt::wincc::Settings::isSecretOption((const char *) kw) )
       {
         // may be encrypted: decrypted in init() once all paths are known
         pendingSecrets.push_back({current, std::string((const char *) kw), std::string((const char *) value)});
       }
       else
       {
-        try
-        {
-          current->options.set((const char *) kw, (const char *) value);
-          current->noteOption((const char *) kw, (const char *) value);
-        }
-        catch (const rsmqtt::Error &e)
-        {
-          cfgError(CharString("connection '") + current->name.c_str() + "': " + e.what());
-        }
+        std::string err;
+        if ( !current->settings.setOption((const char *) kw, std::string_view((const char *) value, value.len()), err) )
+          cfgError(CharString("connection '") + current->name.c_str() + "': " + err.c_str());
       }
     }
     else if ( !commonKeyWord() )

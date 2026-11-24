@@ -183,6 +183,8 @@ private:
 class Options {
 public:
   Options() : o_(rsmqtt_options_new()) {}
+  /// Takes over a handle created elsewhere (e.g. by rsmqtt-wincc).
+  static Options adopt(rsmqtt_options *owned) { return Options(owned, 0); }
   Options(const Options &o) : o_(rsmqtt_options_clone(o.o_)) {}
   Options(Options &&o) noexcept : o_(o.o_) { o.o_ = nullptr; }
   Options &operator=(Options o) noexcept {
@@ -223,6 +225,10 @@ public:
   const rsmqtt_options *get() const { return o_; }
 
 private:
+  Options(rsmqtt_options *owned, int) : o_(owned) {
+    if (!o_)
+      throw Error(RSMQTT_NULL_PARAMETER, "no options");
+  }
   rsmqtt_options *o_;
 };
 
