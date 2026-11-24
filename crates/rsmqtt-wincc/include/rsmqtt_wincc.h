@@ -275,7 +275,7 @@ void   rsmqtt_wincc_router_free(rsmqtt_wincc_router *r);
 int    rsmqtt_wincc_router_add(rsmqtt_wincc_router *r, const char *full_address, int is_dyn, int input, int default_qos,
                                rsmqtt_wincc_buf *filter);
 int    rsmqtt_wincc_router_remove(rsmqtt_wincc_router *r, const char *full_address, int input, rsmqtt_wincc_buf *filter);
-/* subscriptions of the driver's MSA service, by id: add 1 = subscribe *filter (-1 invalid filter),
+/* subscriptions of the driver's MSA service, by id: add 1 = subscribe *filter, always (-1 invalid filter),
    remove 1 = unsubscribe *filter; _service: the ids the last message is for, *text: UTF-8 without NUL */
 int    rsmqtt_wincc_router_add_service(rsmqtt_wincc_router *r, uint64_t id, const char *filter, int qos,
                                        rsmqtt_wincc_buf *subscribe);
@@ -285,7 +285,7 @@ int    rsmqtt_wincc_router_filter(const rsmqtt_wincc_router *r, const char *filt
 int    rsmqtt_wincc_router_filters(const rsmqtt_wincc_router *r, rsmqtt_wincc_buf *out);  /* each followed by NUL */
 int    rsmqtt_wincc_router_has_addresses(const rsmqtt_wincc_router *r);
 void   rsmqtt_wincc_router_message(rsmqtt_wincc_router *r, const char *topic, const char *payload, size_t len,
-                                   int64_t now_ms, const char *state_host, int64_t state_ts);
+                                   int64_t now_ms, const char *state_host, int64_t state_ts, int retained);
 void   rsmqtt_wincc_router_state(rsmqtt_wincc_router *r, int connected);
 void   rsmqtt_wincc_router_connected(rsmqtt_wincc_router *r, const char *state_host, int64_t state_ts);
 void   rsmqtt_wincc_router_connection_lost(rsmqtt_wincc_router *r);

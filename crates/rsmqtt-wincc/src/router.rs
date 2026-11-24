@@ -206,21 +206,34 @@ impl Subscription {
 
 /// Overlapping filters (a/# and a/b) make brokers like mosquitto send a
 /// message once per filter, back to back. The service subscriptions get it
-/// once: identical messages that directly follow are skipped, up to the
-/// number of further filters that matched. `$share/` filters are not
-/// counted (they may or may not get a copy: a duplicate is better than a
-/// lost message). Addresses get every copy.
+/// once: identical messages (topic, payload, retained) that directly follow
+/// within COPY_WINDOW_MS are skipped, up to the number of further filters
+/// that matched. `$share/` filters are not counted (they may or may not get
+/// a copy: a duplicate is better than a lost message). The time limit keeps
+/// a value that is published again from being taken for a copy when the
+/// broker sent fewer copies (one per client, a refused or no-local filter).
+/// Addresses get every copy.
 #[derive(Default)]
 struct Copies {
     topic: String,
     payload: Vec<u8>,
+    retained: bool,
+    at_ms: i64,
     left: usize,
 }
 
+/// Copies of one publish arrive back to back; a later identical message is new.
+const COPY_WINDOW_MS: i64 = 100;
+
 impl Copies {
     /// A message that matched `filters` filters: true if it is a copy.
-    fn check(&mut self, topic: &str, payload: &[u8], filters: usize, for_service: bool) -> bool {
-        if self.left > 0 && self.topic == topic && self.payload == payload {
+    fn check(&mut self, topic: &str, payload: &[u8], retained: bool, now_ms: i64, filters: usize, for_service: bool) -> bool {
+        if self.left > 0
+            && (0..=COPY_WINDOW_MS).contains(&(now_ms - self.at_ms))
+            && self.retained == retained
+            && self.topic == topic
+            && self.payload == payload
+        {
             self.left -= 1;
             return true;
         }
@@ -230,6 +243,8 @@ impl Copies {
             self.topic.push_str(topic);
             self.payload.clear();
             self.payload.extend_from_slice(payload);
+            self.retained = retained;
+            self.at_ms = now_ms;
         }
         false
     }
@@ -367,13 +382,14 @@ impl Router {
     }
 
     /// Registers a subscription of the MSA service; returns the filter to
-    /// subscribe (again: new, or with a higher QoS).
-    pub fn add_service(&mut self, id: u64, filter: &str, qos: i32) -> Result<Option<String>, String> {
+    /// subscribe, always: also for a filter that is subscribed already, the
+    /// SUBSCRIBE makes the broker send its retained messages for the new
+    /// subscription (the other users of the filter see them again).
+    pub fn add_service(&mut self, id: u64, filter: &str, qos: i32) -> Result<String, String> {
         address::check_filter(filter)?;
         let is_new = !self.subs.contains_key(filter);
         let sub = self.subs.entry(filter.to_string()).or_default();
-        let changed = is_new || qos > sub.qos;
-        if changed {
+        if is_new || qos > sub.qos {
             sub.qos = qos;
         }
         if is_new {
@@ -384,7 +400,7 @@ impl Router {
         }
         sub.service.push(id);
         self.service.insert(id, filter.to_string());
-        Ok(changed.then(|| filter.to_string()))
+        Ok(filter.to_string())
     }
 
     /// Unregisters a subscription of the MSA service; returns the filter to
@@ -423,7 +439,17 @@ impl Router {
 
     /// One message. `state_host` / `state_ts`: the Sparkplug host id this
     /// client publishes STATE for ("" for none) and its timestamp.
-    pub fn message_into(&mut self, topic: &str, payload: &[u8], now_ms: i64, state_host: &str, state_ts: i64, out: &mut Outcome) {
+    #[allow(clippy::too_many_arguments)]
+    pub fn message_into(
+        &mut self,
+        topic: &str,
+        payload: &[u8],
+        retained: bool,
+        now_ms: i64,
+        state_host: &str,
+        state_ts: i64,
+        out: &mut Outcome,
+    ) {
         out.clear();
 
         // our own STATE: another client (an earlier session's will) set it
@@ -476,7 +502,7 @@ impl Router {
         }
 
         // the service subscriptions get one copy of each message
-        if copies.check(topic, payload, filters, !out.service.is_empty()) {
+        if copies.check(topic, payload, retained, now_ms, filters, !out.service.is_empty()) {
             out.service.clear();
         } else if !out.service.is_empty() {
             out.service_text = !payload.contains(&0) && std::str::from_utf8(payload).is_ok();
@@ -527,7 +553,7 @@ impl Router {
     /// [`Router::message_into`] with a new Outcome.
     pub fn message(&mut self, topic: &str, payload: &[u8], now_ms: i64, state_host: &str, state_ts: i64) -> Outcome {
         let mut out = Outcome::default();
-        self.message_into(topic, payload, now_ms, state_host, state_ts, &mut out);
+        self.message_into(topic, payload, false, now_ms, state_host, state_ts, &mut out);
         out
     }
 
@@ -769,17 +795,25 @@ mod tests {
     fn service_subscriptions() {
         let mut r = Router::new();
         assert!(r.add_service(1, "a/#/b", 1).is_err());
-        assert_eq!(r.add_service(1, "a/#", 1).unwrap(), Some("a/#".into()));
-        assert_eq!(r.add_service(2, "a/#", 0).unwrap(), None);
+        assert_eq!(r.add_service(1, "a/#", 1).unwrap(), "a/#");
+        // a filter in use is subscribed again too: the broker sends the retained messages
+        assert_eq!(r.add_service(2, "a/#", 0).unwrap(), "a/#");
+        assert_eq!(r.filter("a/#").unwrap().qos, 1);
         // shared with an address: removing one keeps the filter
         assert_eq!(r.add("p:a/b", false, true, 1).unwrap(), Added::Subscribe("a/b".into()));
-        assert_eq!(r.add_service(3, "a/b", 2).unwrap(), Some("a/b".into()));
+        assert_eq!(r.add_service(3, "a/b", 2).unwrap(), "a/b");
         assert_eq!(r.remove("p:a/b", true), None);
         assert_eq!(r.filter("a/b").unwrap().qos, 2);
 
         let mut out = Outcome::default();
+        let at = |r: &mut Router, topic: &str, payload: &[u8], retained: bool, now: i64, out: &mut Outcome| {
+            r.message_into(topic, payload, retained, now, "", 0, out);
+            let mut v = out.service.clone();
+            v.sort();
+            v
+        };
         let ids = |r: &mut Router, topic: &str, payload: &[u8], out: &mut Outcome| {
-            r.message_into(topic, payload, 0, "", 0, out);
+            r.message_into(topic, payload, false, 0, "", 0, out);
             let mut v = out.service.clone();
             v.sort();
             v
@@ -802,6 +836,14 @@ mod tests {
         assert_eq!(ids(&mut r, "a/c", b"z", &mut out), vec![1, 2]);
         assert_eq!(ids(&mut r, "a/b", b"y", &mut out), vec![1, 2, 3]);
         assert_eq!(ids(&mut r, "b", b"y", &mut out), Vec::<u64>::new());
+        // copies follow within COPY_WINDOW_MS; the same value later is a new
+        // message (a broker that sends one copy per client)
+        assert_eq!(at(&mut r, "a/b", b"v", false, 1000, &mut out), vec![1, 2, 3]);
+        assert_eq!(at(&mut r, "a/b", b"v", false, 1000 + COPY_WINDOW_MS + 1, &mut out), vec![1, 2, 3]);
+        // a retained message is no copy of a live one
+        assert_eq!(at(&mut r, "a/b", b"w", false, 3000, &mut out), vec![1, 2, 3]);
+        assert_eq!(at(&mut r, "a/b", b"w", true, 3001, &mut out), vec![1, 2, 3]);
+        assert_eq!(at(&mut r, "a/b", b"w", true, 3002, &mut out), Vec::<u64>::new());
 
         assert_eq!(r.remove_service(1), None);
         assert_eq!(r.remove_service(2), Some("a/#".into()));
@@ -987,7 +1029,7 @@ mod tests {
         let mut out = Outcome::default();
         let run = |r: &mut Router, out: &mut Outcome| {
             for p in payloads {
-                r.message_into("s/1", p, 0, "", 0, out);
+                r.message_into("s/1", p, false, 0, "", 0, out);
                 assert!(out.deliveries.len() >= 2);
             }
         };
@@ -1001,12 +1043,12 @@ mod tests {
         assert_eq!(counting::allocations() - before, 0, "allocations per 300 messages");
 
         // a payload that keeps not fitting: warned once, then nothing either
-        r.message_into("s/1", b"42", 0, "", 0, &mut out);
+        r.message_into("s/1", b"42", false, 0, "", 0, &mut out);
         assert!(!out.warnings.is_empty());
         let before = counting::allocations();
         for _ in 0..100 {
-            r.message_into("s/1", b"42", 0, "", 0, &mut out);
-            r.message_into("s/1", b"{\"data\":", 0, "", 0, &mut out);
+            r.message_into("s/1", b"42", false, 0, "", 0, &mut out);
+            r.message_into("s/1", b"{\"data\":", false, 0, "", 0, &mut out);
         }
         assert!(out.warnings.is_empty());
         let not_json = counting::allocations() - before;
@@ -1025,7 +1067,7 @@ mod tests {
             let p = payloads[0];
             let mut d = std::mem::zeroed::<RsmqttWinccDelivery>();
             let mut call = || {
-                rsmqtt_wincc_router_message(h, c"s/1".as_ptr(), p.as_ptr() as _, p.len(), 0, c"".as_ptr(), 0);
+                rsmqtt_wincc_router_message(h, c"s/1".as_ptr(), p.as_ptr() as _, p.len(), 0, c"".as_ptr(), 0, 0);
                 for i in 0..rsmqtt_wincc_router_delivery_count(h) {
                     rsmqtt_wincc_router_delivery_get(h, i, &mut d);
                 }
