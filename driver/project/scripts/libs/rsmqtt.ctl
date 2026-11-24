@@ -558,8 +558,8 @@ bool rsmqttParseReference(string ref, string &broker, string &topic, int &qos, i
 /** Sets the driver and peripheral address configs of a DPE.
   @param dpe        datapoint element, e.g. "Pump1.temperature"
   @param reference  "<broker>:<topic>[;qos=N][;retain][;nolocal][;rap][;rh=N][;json[=path]][;ts=path]"
-  @param datatype   RSMQTT_STRING .. RSMQTT_BLOB; for a dyn element the type of its items
-                    (RSMQTT_STRING .. RSMQTT_BOOL), the payload is then a JSON array
+  @param datatype   RSMQTT_STRING .. RSMQTT_BLOB; for a dyn element the type of its items,
+                    the payload is then a JSON array (dyn_blob: of base64 strings)
   @param direction  RSMQTT_IN, RSMQTT_OUT or RSMQTT_IO
   @param driverNum  number the driver is started with (-num)
   @return 0 on success, -1 on error
@@ -689,6 +689,53 @@ string rsmqttPanelOptName(string opt)
 {
   int eq = strpos(opt, "=");
   return strtolower(strltrim(strrtrim(eq < 0 ? opt : substr(opt, 0, eq))));
+}
+
+/** TRUE for an option that may be given more than once (a name of rsmqttPanelOptNorm). */
+bool rsmqttPanelOptRepeatable(string norm)
+{
+  if ( strpos(norm, "redu.") == 0 )
+    norm = substr(norm, 5);
+  return norm == "userproperty" || norm == "httpheader" || norm == "will.userproperty";
+}
+
+/** The broker panel's option list (cmbAddOption): adds the option picked
+    there, "name=example value", to txtOptions. An option that is already
+    set is not added twice (except the repeatable ones); the list goes back
+    to its first entry. */
+void rsmqttPanelAddOption()
+{
+  int pos;
+  string opt, options;
+  getMultiValue("cmbAddOption", "selectedPos", pos,
+                "cmbAddOption", "text",        opt,
+                "txtOptions",   "text",        options);
+  if ( pos <= 1 )
+    return;  // the "add an option" entry
+  setValue("cmbAddOption", "selectedPos", 1);
+
+  string name = rsmqttPanelOptName(opt);
+  dyn_string opts = rsmqttPanelSplit(options, ";\n");
+  if ( !rsmqttPanelOptRepeatable(rsmqttPanelOptNorm(name)) )
+    for (int i = 1; i <= dynlen(opts); i++)
+      if ( rsmqttPanelOptNorm(rsmqttPanelOptName(opts[i])) == rsmqttPanelOptNorm(name) )
+      {
+        rsmqttPanelMessage(rsmqttT("'" + rsmqttPanelOptName(opts[i]) + "' ist schon gesetzt.",
+                                   "'" + rsmqttPanelOptName(opts[i]) + "' is set already."), TRUE);
+        return;
+      }
+  dynAppend(opts, opt);
+  setValue("txtOptions", "text", rsmqttPanelJoin(opts, "; "));
+  rsmqttPanelMessage(rsmqttT("'" + opt + "' hinzugefügt: Wert anpassen und speichern.",
+                             "'" + opt + "' added: adjust the value and save."), FALSE);
+}
+
+/** An option name as rsmqtt compares it: lower case, without '_' and '-'. */
+string rsmqttPanelOptNorm(string name)
+{
+  strreplace(name, "_", "");
+  strreplace(name, "-", "");
+  return strtolower(strltrim(strrtrim(name)));
 }
 
 /** Value of an option "name=value", trimmed. */

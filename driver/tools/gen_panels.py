@@ -20,14 +20,105 @@ Object names used by the rsmqttPanel*() functions of scripts/libs/rsmqtt.ctl
     cmbBroker, spinDriver, chkActive, txtUri, txtUris, txtClientId, cmbVersion,
     txtKeepAlive, chkClean, txtUser, txtPassword, txtTrust, txtKeyStore,
     txtKey, chkVerify, txtWillTopic, txtWillPayload, cmbWillQos,
-    chkWillRetain, cmbSubQos, cmbPubQos, chkPubRetain, txtOptions,
+    chkWillRetain, cmbSubQos, cmbPubQos, chkPubRetain, txtOptions, cmbAddOption,
     lblState, lblError, lblInfo, lblMessage, txtSpbHost, txtSpbHost2, lblSpbState,
     tabBrokers, lblShown, lblSnapshot, lblCopyFrom
 """
 
+import re
+import sys
 from pathlib import Path
 
 PANELS = Path(__file__).resolve().parents[1] / "project" / "panels" / "para"
+OPTIONS_RS = Path(__file__).resolve().parents[2] / "crates" / "rsmqtt" / "src" / "options.rs"
+
+# The "add an option" list of the broker panel: every rsmqtt option that has
+# no field of its own, as "name=example value". Checked against OPTION_NAMES
+# in crates/rsmqtt/src/options.rs (see check_option_list).
+PANEL_OPTIONS = [
+    # connection
+    "connectTimeout=30",
+    "automaticReconnect=1",
+    "minRetryInterval=1",
+    "maxRetryInterval=60",
+    "maxInflight=65535",
+    "httpProxy=http://proxy:8080",
+    "httpsProxy=http://proxy:8080",
+    "httpHeader=Name: value",
+    # MQTT 5 enhanced authentication (user name and password of the form)
+    "auth.method=SCRAM-SHA-256",
+    "auth.method=SCRAM-SHA-512",
+    "auth.method=SCRAM-SHA-1",
+    # MQTT 5 connect properties
+    "sessionExpiryInterval=3600",
+    "receiveMaximum=65535",
+    "maximumPacketSize=268435455",
+    "topicAliasMaximum=0",
+    "requestResponseInformation=0",
+    "requestProblemInformation=1",
+    "userProperty=key=value",
+    # buffering and persistence
+    "sendWhileDisconnected=1",
+    "maxBufferedMessages=10000",
+    "deleteOldestMessages=1",
+    "allowDisconnectedSendAtAnyTime=0",
+    "persistence=file",
+    "persistenceDir=rsmqtt",
+    "restoreMessages=1",
+    "persistQos0=0",
+    # last will (MQTT 5)
+    "will.delayInterval=0",
+    "will.messageExpiryInterval=3600",
+    "will.contentType=application/json",
+    "will.responseTopic=topic",
+    "will.payloadFormatIndicator=1",
+    "will.userProperty=key=value",
+    # TLS
+    "ssl.enableServerCertAuth=1",
+    "ssl.sslVersion=1.2",
+    "ssl.enabledCipherSuites=TLS13_AES_256_GCM_SHA384",
+    "ssl.alpn=mqtt",
+    "ssl.CApath=C:/certs",
+    "ssl.disableDefaultTrustStore=0",
+    # redundancy: settings of the second host
+    "redu.serverURI=tcp://broker-b:1883",
+    "redu.clientId=scada-b",
+    "redu.username=user",
+]
+
+# rsmqtt options with a field of their own in the broker panel, or not for the
+# driver: auth.data only goes with a C authentication callback, the event
+# options are the driver's, ssl.privateKeyPassword is not supported
+NOT_IN_PANEL_LIST = {
+    "serveruri", "serveruris", "clientid", "mqttversion", "keepaliveinterval", "cleansession", "cleanstart",
+    "username", "password", "ssl.truststore", "ssl.keystore", "ssl.privatekey", "ssl.verify",
+    "will.topic", "will.payload", "will.message", "will.qos", "will.retained",
+    "auth.data", "completionevents", "maxqueuedevents", "runtimethreads", "ssl.privatekeypassword",
+}
+
+
+def normalize_option(name):
+    """As rsmqtt's normalize_name for the names used here: lower case, no _ or -."""
+    return name.strip().lower().replace("_", "").replace("-", "")
+
+
+def check_option_list():
+    """Every listed option is an rsmqtt option, and every rsmqtt option is listed or deliberately left out."""
+    src = OPTIONS_RS.read_text(encoding="utf-8")
+    block = re.search(r"pub const OPTION_NAMES: &\[&str\] = &\[(.*?)\];", src, re.S).group(1)
+    known = set(re.findall(r'"([a-z0-9.]+)"', block))
+    listed = set()
+    for opt in PANEL_OPTIONS:
+        name = normalize_option(opt.split("=", 1)[0])
+        base = name[len("redu."):] if name.startswith("redu.") else name
+        if base not in known:
+            sys.exit(f"gen_panels: '{opt}' is not an rsmqtt option ({OPTIONS_RS})")
+        if not name.startswith("redu."):
+            listed.add(name)
+    missing = known - listed - NOT_IN_PANEL_LIST
+    if missing:
+        sys.exit("gen_panels: rsmqtt options missing from PANEL_OPTIONS (or NOT_IN_PANEL_LIST): " +
+                 ", ".join(sorted(missing)))
 
 LANGS = (10000, 10001, 10027)  # de, en, ru (as the stock PARA panels)
 
@@ -407,8 +498,8 @@ def address_panel():
             "JSON path e.g. data.temp, values[0], ['a.b']; empty = whole payload.",
             bold=False)
     p.label("lblHint4", 20, 372, 580,
-            "Zeitstempel: ISO 8601 oder Sekunden/ms seit 1970.  dyn-Elemente: JSON-Array.",
-            "Timestamp: ISO 8601 or seconds/ms since 1970.  dyn elements: JSON array.",
+            "Zeitstempel: ISO 8601 oder s/ms seit 1970.  dyn-Elemente: JSON-Array (dyn_blob: Base64).",
+            "Timestamp: ISO 8601 or s/ms since 1970.  dyn elements: JSON array (dyn_blob: base64).",
             bold=False)
     p.label("lblHint5", 20, 390, 580,
             "Sparkplug B: Topic $spb/<Gruppe>/<Edge Node>[/<Gerät>], Option metric=<Name> oder online.",
@@ -606,7 +697,11 @@ def broker_panel():
     p.label("lblOptions", 20, y, 660,
             "Weitere rsmqtt-Optionen (name=wert; ...), z.B. sessionExpiryInterval=3600; ssl.alpn=mqtt",
             "More rsmqtt options (name=value; ...), e.g. sessionExpiryInterval=3600; ssl.alpn=mqtt", bold=False)
-    p.textfield("txtOptions", 18, y + 18, 690, y + 44)
+    p.textfield("txtOptions", 18, y + 18, 470, y + 44)
+    # picking an option adds it with an example value to txtOptions
+    p.combobox("cmbAddOption", 478, y + 18, 690, y + 44,
+               [("(Option hinzufügen ...)", "(add an option ...)")] + [(o, o) for o in PANEL_OPTIONS],
+               changed=lib_click("rsmqttPanelAddOption()"))
 
     y += 56
     p.label("lblMessage", 20, y, 660, "", bold=True)
@@ -641,5 +736,6 @@ def broker_panel():
 
 
 if __name__ == "__main__":
+    check_option_list()
     address_panel()
     broker_panel()

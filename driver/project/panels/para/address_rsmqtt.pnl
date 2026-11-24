@@ -472,9 +472,9 @@ LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 0 3
-LANG:10000 76 Zeitstempel: ISO 8601 oder Sekunden/ms seit 1970.  dyn-Elemente: JSON-Array.
-LANG:10001 72 Timestamp: ISO 8601 or seconds/ms since 1970.  dyn elements: JSON array.
-LANG:10027 72 Timestamp: ISO 8601 or seconds/ms since 1970.  dyn elements: JSON array.
+LANG:10000 88 Zeitstempel: ISO 8601 oder s/ms seit 1970.  dyn-Elemente: JSON-Array (dyn_blob: Base64).
+LANG:10001 85 Timestamp: ISO 8601 or s/ms since 1970.  dyn elements: JSON array (dyn_blob: base64).
+LANG:10027 85 Timestamp: ISO 8601 or s/ms since 1970.  dyn elements: JSON array (dyn_blob: base64).
 2 115
 "lblHint5"
 ""

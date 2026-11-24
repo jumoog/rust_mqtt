@@ -1767,14 +1767,298 @@ LANG:10027 0
 LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-0  578 800 1250 826
+0  578 800 1030 826
 3 "1000s" 1000 0 0 0 0 -1  E E E
-2 161
+22 161
+"cmbAddOption"
+""
+1 1036 800 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
+ E E
+161 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+1
+"layoutAlignment" "AlignCenter"
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0  1038 800 1250 826
+42
+3
+LANG:10000 24 (Option hinzufügen ...)
+LANG:10001 19 (add an option ...)
+LANG:10027 19 (add an option ...)
+
+1
+3
+LANG:10000 17 connectTimeout=30
+LANG:10001 17 connectTimeout=30
+LANG:10027 17 connectTimeout=30
+
+0
+3
+LANG:10000 20 automaticReconnect=1
+LANG:10001 20 automaticReconnect=1
+LANG:10027 20 automaticReconnect=1
+
+0
+3
+LANG:10000 18 minRetryInterval=1
+LANG:10001 18 minRetryInterval=1
+LANG:10027 18 minRetryInterval=1
+
+0
+3
+LANG:10000 19 maxRetryInterval=60
+LANG:10001 19 maxRetryInterval=60
+LANG:10027 19 maxRetryInterval=60
+
+0
+3
+LANG:10000 17 maxInflight=65535
+LANG:10001 17 maxInflight=65535
+LANG:10027 17 maxInflight=65535
+
+0
+3
+LANG:10000 27 httpProxy=http://proxy:8080
+LANG:10001 27 httpProxy=http://proxy:8080
+LANG:10027 27 httpProxy=http://proxy:8080
+
+0
+3
+LANG:10000 28 httpsProxy=http://proxy:8080
+LANG:10001 28 httpsProxy=http://proxy:8080
+LANG:10027 28 httpsProxy=http://proxy:8080
+
+0
+3
+LANG:10000 22 httpHeader=Name: value
+LANG:10001 22 httpHeader=Name: value
+LANG:10027 22 httpHeader=Name: value
+
+0
+3
+LANG:10000 25 auth.method=SCRAM-SHA-256
+LANG:10001 25 auth.method=SCRAM-SHA-256
+LANG:10027 25 auth.method=SCRAM-SHA-256
+
+0
+3
+LANG:10000 25 auth.method=SCRAM-SHA-512
+LANG:10001 25 auth.method=SCRAM-SHA-512
+LANG:10027 25 auth.method=SCRAM-SHA-512
+
+0
+3
+LANG:10000 23 auth.method=SCRAM-SHA-1
+LANG:10001 23 auth.method=SCRAM-SHA-1
+LANG:10027 23 auth.method=SCRAM-SHA-1
+
+0
+3
+LANG:10000 26 sessionExpiryInterval=3600
+LANG:10001 26 sessionExpiryInterval=3600
+LANG:10027 26 sessionExpiryInterval=3600
+
+0
+3
+LANG:10000 20 receiveMaximum=65535
+LANG:10001 20 receiveMaximum=65535
+LANG:10027 20 receiveMaximum=65535
+
+0
+3
+LANG:10000 27 maximumPacketSize=268435455
+LANG:10001 27 maximumPacketSize=268435455
+LANG:10027 27 maximumPacketSize=268435455
+
+0
+3
+LANG:10000 19 topicAliasMaximum=0
+LANG:10001 19 topicAliasMaximum=0
+LANG:10027 19 topicAliasMaximum=0
+
+0
+3
+LANG:10000 28 requestResponseInformation=0
+LANG:10001 28 requestResponseInformation=0
+LANG:10027 28 requestResponseInformation=0
+
+0
+3
+LANG:10000 27 requestProblemInformation=1
+LANG:10001 27 requestProblemInformation=1
+LANG:10027 27 requestProblemInformation=1
+
+0
+3
+LANG:10000 22 userProperty=key=value
+LANG:10001 22 userProperty=key=value
+LANG:10027 22 userProperty=key=value
+
+0
+3
+LANG:10000 23 sendWhileDisconnected=1
+LANG:10001 23 sendWhileDisconnected=1
+LANG:10027 23 sendWhileDisconnected=1
+
+0
+3
+LANG:10000 25 maxBufferedMessages=10000
+LANG:10001 25 maxBufferedMessages=10000
+LANG:10027 25 maxBufferedMessages=10000
+
+0
+3
+LANG:10000 22 deleteOldestMessages=1
+LANG:10001 22 deleteOldestMessages=1
+LANG:10027 22 deleteOldestMessages=1
+
+0
+3
+LANG:10000 32 allowDisconnectedSendAtAnyTime=0
+LANG:10001 32 allowDisconnectedSendAtAnyTime=0
+LANG:10027 32 allowDisconnectedSendAtAnyTime=0
+
+0
+3
+LANG:10000 16 persistence=file
+LANG:10001 16 persistence=file
+LANG:10027 16 persistence=file
+
+0
+3
+LANG:10000 21 persistenceDir=rsmqtt
+LANG:10001 21 persistenceDir=rsmqtt
+LANG:10027 21 persistenceDir=rsmqtt
+
+0
+3
+LANG:10000 17 restoreMessages=1
+LANG:10001 17 restoreMessages=1
+LANG:10027 17 restoreMessages=1
+
+0
+3
+LANG:10000 13 persistQos0=0
+LANG:10001 13 persistQos0=0
+LANG:10027 13 persistQos0=0
+
+0
+3
+LANG:10000 20 will.delayInterval=0
+LANG:10001 20 will.delayInterval=0
+LANG:10027 20 will.delayInterval=0
+
+0
+3
+LANG:10000 31 will.messageExpiryInterval=3600
+LANG:10001 31 will.messageExpiryInterval=3600
+LANG:10027 31 will.messageExpiryInterval=3600
+
+0
+3
+LANG:10000 33 will.contentType=application/json
+LANG:10001 33 will.contentType=application/json
+LANG:10027 33 will.contentType=application/json
+
+0
+3
+LANG:10000 24 will.responseTopic=topic
+LANG:10001 24 will.responseTopic=topic
+LANG:10027 24 will.responseTopic=topic
+
+0
+3
+LANG:10000 29 will.payloadFormatIndicator=1
+LANG:10001 29 will.payloadFormatIndicator=1
+LANG:10027 29 will.payloadFormatIndicator=1
+
+0
+3
+LANG:10000 27 will.userProperty=key=value
+LANG:10001 27 will.userProperty=key=value
+LANG:10027 27 will.userProperty=key=value
+
+0
+3
+LANG:10000 26 ssl.enableServerCertAuth=1
+LANG:10001 26 ssl.enableServerCertAuth=1
+LANG:10027 26 ssl.enableServerCertAuth=1
+
+0
+3
+LANG:10000 18 ssl.sslVersion=1.2
+LANG:10001 18 ssl.sslVersion=1.2
+LANG:10027 18 ssl.sslVersion=1.2
+
+0
+3
+LANG:10000 48 ssl.enabledCipherSuites=TLS13_AES_256_GCM_SHA384
+LANG:10001 48 ssl.enabledCipherSuites=TLS13_AES_256_GCM_SHA384
+LANG:10027 48 ssl.enabledCipherSuites=TLS13_AES_256_GCM_SHA384
+
+0
+3
+LANG:10000 13 ssl.alpn=mqtt
+LANG:10001 13 ssl.alpn=mqtt
+LANG:10027 13 ssl.alpn=mqtt
+
+0
+3
+LANG:10000 19 ssl.CApath=C:/certs
+LANG:10001 19 ssl.CApath=C:/certs
+LANG:10027 19 ssl.CApath=C:/certs
+
+0
+3
+LANG:10000 30 ssl.disableDefaultTrustStore=0
+LANG:10001 30 ssl.disableDefaultTrustStore=0
+LANG:10027 30 ssl.disableDefaultTrustStore=0
+
+0
+3
+LANG:10000 34 redu.serverURI=tcp://broker-b:1883
+LANG:10001 34 redu.serverURI=tcp://broker-b:1883
+LANG:10027 34 redu.serverURI=tcp://broker-b:1883
+
+0
+3
+LANG:10000 21 redu.clientId=scada-b
+LANG:10001 21 redu.clientId=scada-b
+LANG:10027 21 redu.clientId=scada-b
+
+0
+3
+LANG:10000 18 redu.username=user
+LANG:10001 18 redu.username=user
+LANG:10027 18 redu.username=user
+
+0
+
+E
+"#uses \"rsmqtt\"
+
+main()
+{
+  rsmqttPanelAddOption();
+}" 0
+
+E
+ 0 0
+2 162
 "lblMessage"
 ""
 1 580 838 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
  E E
-161 0 0 0 0 0
+162 0 0 0 0 0
 E E E
 0
 3
@@ -1797,12 +2081,12 @@ LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
 LANG:10000 0 
 LANG:10001 0 
 LANG:10027 0 
-13 162
+13 163
 "cmdSave"
 ""
 1 1037 876 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
  E E
-162 0 0 0 0 0
+163 0 0 0 0 0
 E E E
 0
 3
@@ -1830,12 +2114,12 @@ main()
   rsmqttPanelSave();
 }" 0
  E E E
-13 163
+13 164
 "cmdClose"
 ""
 1 1153 876 E E E 1 E 1 E N "_ButtonText" E N "_Button" E E
  E E
-163 0 0 0 0 0
+164 0 0 0 0 0
 E E E
 0
 3
@@ -1867,36 +2151,8 @@ main()
   PanelOffReturn(makeDynFloat(1), makeDynString(broker));
 }" 0
  E E E
-2 164
-"lblShown"
-""
-1 580 868 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
- E E
-164 0 0 0 0 0
-E E E
-0
-3
-LANG:10000 0 
-LANG:10001 0 
-LANG:10027 0 
-
-4
-"sizePolicy" "Fixed Fixed"
-"layoutAlignment" "AlignCenter"
-"dashclr"N "_Transparent"
-"antiAliased" "0"
-E E 0 1 1 0 1 E U  1 E 580 868 680 882
-0 0 0 "0s" 0 0 0 192 0 0  580 868 1
-3
-LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
-0 3
-LANG:10000 0 
-LANG:10001 0 
-LANG:10027 0 
 2 165
-"lblSnapshot"
+"lblShown"
 ""
 1 580 868 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
  E E
@@ -1924,7 +2180,7 @@ LANG:10000 0
 LANG:10001 0 
 LANG:10027 0 
 2 166
-"lblCopyFrom"
+"lblSnapshot"
 ""
 1 580 868 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
  E E
@@ -1952,11 +2208,39 @@ LANG:10000 0
 LANG:10001 0 
 LANG:10027 0 
 2 167
+"lblCopyFrom"
+""
+1 580 868 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
+ E E
+167 0 0 0 0 0
+E E E
+0
+3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+
+4
+"sizePolicy" "Fixed Fixed"
+"layoutAlignment" "AlignCenter"
+"dashclr"N "_Transparent"
+"antiAliased" "0"
+E E 0 1 1 0 1 E U  1 E 580 868 680 882
+0 0 0 "0s" 0 0 0 192 0 0  580 868 1
+3
+LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
+0 3
+LANG:10000 0 
+LANG:10001 0 
+LANG:10027 0 
+2 168
 "lblOverview"
 ""
 1 20 44 E E E 1 E 1 E N "_3DText" E N "_3DFace" E E
  E E
-167 0 0 0 0 0
+168 0 0 0 0 0
 E E E
 0
 3
@@ -1979,12 +2263,12 @@ LANG:10027 39 Arial,-1,13,5,700,0,0,0,0,0,0,0,0,0,0,1
 LANG:10000 11 Alle Broker
 LANG:10001 11 All brokers
 LANG:10027 11 All brokers
-25 168
+25 169
 "tabBrokers"
 ""
 1 18 62 E E E 1 E 1 E N "_WindowText" E N "_Window" E E
  E E
-168 0 0 0 0 0
+169 0 0 0 0 0
 E E E
 0
 3
