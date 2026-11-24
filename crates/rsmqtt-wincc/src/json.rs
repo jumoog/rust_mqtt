@@ -1376,9 +1376,80 @@ pub fn dyn_items(payload: &[u8]) -> Result<Vec<(Vec<u8>, bool)>, String> {
     Ok(out)
 }
 
+/// The items of a payload for a dyn_blob DPE. JSON has no bytes, so items
+/// are base64 strings: a JSON array of them gives one item per element, a
+/// JSON string one item; an empty payload, `null` or `[]` none (a payload
+/// of white space only is raw data: one item). Any other
+/// payload (not JSON, a number, an object) is one item with the payload's
+/// bytes as they are.
+pub fn dyn_blob_items(payload: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    // raw bytes may be white space: only an empty payload has no items
+    if payload.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (found, v, _) = get(payload, &Path::new());
+    if found != Found::Yes {
+        return Ok(vec![payload.to_vec()]);
+    }
+    match v.kind {
+        Kind::Null => Ok(Vec::new()),
+        Kind::String => Ok(vec![rsmqtt::base64::decode(&v.text).map_err(|e| format!("item 0: {e}"))?]),
+        Kind::Array => parse_array(&v.text)?
+            .into_iter()
+            .enumerate()
+            .map(|(i, it)| match it.kind {
+                Kind::String => rsmqtt::base64::decode(&it.text).map_err(|e| format!("item {i}: {e}")),
+                _ => Err(format!("item {i}: a dyn_blob item must be a base64 string")),
+            })
+            .collect(),
+        _ => Ok(vec![payload.to_vec()]),
+    }
+}
+
+/// The payload of a dyn_blob DPE: a JSON array of base64 strings.
+pub fn dyn_blob_payload<'a>(items: impl IntoIterator<Item = &'a [u8]>) -> Vec<u8> {
+    let mut out = vec![b'['];
+    for (i, it) in items.into_iter().enumerate() {
+        if i > 0 {
+            out.push(b',');
+        }
+        out.push(b'"');
+        rsmqtt::base64::encode_into(it, &mut out);
+        out.push(b'"');
+    }
+    out.push(b']');
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dyn_blobs() {
+        let d = |s: &[u8]| dyn_blob_items(s);
+        assert_eq!(d(b"").unwrap(), Vec::<Vec<u8>>::new());
+        assert_eq!(d(b" [ ] ").unwrap(), Vec::<Vec<u8>>::new());
+        assert_eq!(d(b"\n").unwrap(), vec![b"\n".to_vec()]);
+        assert_eq!(d(b"  ").unwrap(), vec![b"  ".to_vec()]);
+        assert_eq!(d(b"null").unwrap(), Vec::<Vec<u8>>::new());
+        assert_eq!(d(br#"["Zm9v", "", "AP/+"]"#).unwrap(), vec![b"foo".to_vec(), vec![], vec![0, 0xff, 0xfe]]);
+        assert_eq!(d(br#""Zm9v""#).unwrap(), vec![b"foo".to_vec()]);
+        // not JSON, a number, an object: the payload as it is
+        assert_eq!(d(b"\x00\x01raw").unwrap(), vec![b"\x00\x01raw".to_vec()]);
+        assert_eq!(d(b"42").unwrap(), vec![b"42".to_vec()]);
+        assert_eq!(d(br#"{"a":1}"#).unwrap(), vec![br#"{"a":1}"#.to_vec()]);
+        assert!(d(br#"["Zm9v", 1]"#).unwrap_err().contains("item 1"));
+        assert!(d(br#"["Zm9v", null]"#).is_err());
+        assert!(d(br#"["Zm9v!"]"#).unwrap_err().contains("item 0"));
+        assert!(d(br#""not base64!""#).is_err());
+
+        let items: [&[u8]; 3] = [b"foo", b"", &[0, 0xff, 0xfe]];
+        let p = dyn_blob_payload(items);
+        assert_eq!(p, br#"["Zm9v","","AP/+"]"#);
+        assert_eq!(d(&p).unwrap(), items.iter().map(|i| i.to_vec()).collect::<Vec<_>>());
+        assert_eq!(dyn_blob_payload(std::iter::empty()), b"[]");
+    }
 
     fn p(t: &str) -> Path {
         parse_path(t).unwrap()

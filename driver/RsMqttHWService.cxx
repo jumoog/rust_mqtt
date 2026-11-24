@@ -171,6 +171,9 @@ void RsMqttHWService::stop()
     sparkplugOffline(*c);
     publishBrokerState(*c, true);
   }
+  // subscription changes of the last second: kept for the next start
+  if ( RsMqttService *service = RsMqttService::get() )
+    service->flushState();
   rsmqtt_set_trace_callback(0, nullptr, nullptr);
   drainTrace();
   started = false;
@@ -294,6 +297,10 @@ void RsMqttHWService::workProc()
     if ( service ) service->workProc();
     return;
   }
+
+  // subscriptions restored after a restart: in the routers before messages come
+  if ( service )
+    service->attachRestored();
 
   auto now = Clock::now();
   for (auto &c : RsMqttConnections::instance().all())

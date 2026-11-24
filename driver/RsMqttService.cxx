@@ -1,6 +1,7 @@
 #include "RsMqttService.hxx"
 #include "RsMqttAddress.hxx"
 #include "RsMqttConnections.hxx"
+#include "RsMqttRedu.hxx"
 #include "RsMqttResources.hxx"
 #include "RsMqttTime.hxx"
 
@@ -19,6 +20,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 
 using namespace std::placeholders;
 
@@ -37,6 +40,8 @@ namespace
   constexpr long long DEADLINE_MARGIN_MS = 1000;
   // Deadlines, cancellations and leases are checked this often.
   constexpr auto SCAN_INTERVAL = std::chrono::milliseconds(100);
+  // The state file is written at most this often (and again after a failure).
+  constexpr auto SAVE_INTERVAL = std::chrono::seconds(1);
 
   std::unique_ptr<vrpc::ServiceContainer> container;
 
@@ -146,6 +151,12 @@ RsMqttService::RsMqttService()
   char buf[32];
   snprintf(buf, sizeof(buf), "%llx-", (unsigned long long) rsmqttNowMs());
   idPrefix = buf;
+  startedAt = Clock::now();
+
+  std::string file = "service_" + std::to_string((int) Resources::getManNum()) + (RsMqttRedu::isHost2() ? "_2" : "") +
+                     ".state";
+  statePath = (std::filesystem::path((const char *) Resources::getDataDir()) / "rsmqtt" / file).string();
+  loadState();
 
   registerFunction("Subscribe",   msa::VrpcUnaryMethodSyncDelegate(std::bind(&RsMqttService::subscribe, this, _1, _2, _3)));
   registerFunction("Unsubscribe", msa::VrpcUnaryMethodSyncDelegate(std::bind(&RsMqttService::unsubscribe, this, _1, _2, _3)));
@@ -173,22 +184,147 @@ void RsMqttService::start()
     else
       log(ErrClass::PRIO_SEVERE, "start", "service RsMqtt could not be started");
   });
+  self->attachRestored();  // brokers of the config file are there already
+}
+
+//--------------------------------------------------------------------------------
+// state file
+
+void RsMqttService::loadState()
+{
+  namespace svc = rsmqtt::wincc::service;
+  std::ifstream in(std::filesystem::path(statePath), std::ios::binary);
+  if ( !in )
+    return;
+  std::string line;
+  bool header = false;
+  size_t restored = 0, skipped = 0;
+  while ( std::getline(in, line) )
+  {
+    svc::Record r;
+    svc::Line kind = svc::parse(line, r);
+    if ( kind == svc::Line::Header )
+      header = true;
+    else if ( kind == svc::Line::Record && header && !byName.count(r.id) )
+    {
+      uint64_t id = ++nextId;
+      Subscription &sub = subs[id];
+      sub.name = r.id;
+      sub.broker = r.broker;
+      sub.filter = r.filter;
+      sub.qos = r.qos;
+      sub.binary = r.binary;
+      sub.restored = true;
+      sub.lastSeen = Clock::now();
+      byName[r.id] = id;
+      unattached++;
+      restored++;
+    }
+    else if ( !line.empty() && line != "\r" )
+      skipped++;
+  }
+  if ( restored || skipped )
+    log(skipped ? ErrClass::PRIO_WARNING : ErrClass::PRIO_INFO, "loadState",
+        std::to_string(restored) + " subscription(s) restored from " + statePath +
+        (skipped ? ", " + std::to_string(skipped) + " line(s) skipped" : ""));
+}
+
+bool RsMqttService::saveState()
+{
+  namespace fs = std::filesystem;
+  namespace svc = rsmqtt::wincc::service;
+  std::string text = svc::header() + "\n";
+  for (const auto &[id, sub] : subs)
+    text += svc::record({sub.name, sub.qos, sub.binary, sub.broker, sub.filter}) + "\n";
+
+  // a new file, then rename: a crash never leaves half a file
+  fs::path path(statePath), tmp(statePath + ".tmp");
+  std::error_code ec;
+  fs::create_directories(path.parent_path(), ec);
+  if ( !ec )
+  {
+    std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+    out << text;
+    out.close();
+    if ( !out )
+      ec = std::make_error_code(std::errc::io_error);
+  }
+  if ( !ec )
+    fs::rename(tmp, path, ec);
+  if ( ec && !stateWarned )
+    log(ErrClass::PRIO_WARNING, "saveState", "cannot write " + statePath + " (" + ec.message() +
+        "): subscriptions are not resumed after a restart of the driver");
+  else if ( !ec && stateWarned )
+    log(ErrClass::PRIO_INFO, "saveState", statePath + " written again");
+  stateWarned = (bool) ec;
+  return !ec;
+}
+
+void RsMqttService::flushState()
+{
+  if ( stateDirty )
+    stateDirty = !saveState();
+}
+
+void RsMqttService::attachRestored()
+{
+  if ( !unattached )
+    return;
+  auto now = Clock::now();
+  for (auto it = subs.begin(); it != subs.end();)
+  {
+    Subscription &sub = it->second;
+    if ( sub.conn )
+    {
+      ++it;
+      continue;
+    }
+    RsMqttConnection *conn = findBroker(sub.broker);
+    std::string filter, err;
+    if ( conn && conn->router.addService(it->first, sub.filter, sub.qos, filter, err) )
+    {
+      sub.conn = conn;
+      unattached--;
+      conn->subscribe({filter});  // or on connect
+      DEBUG_DRV_USR1("rsmqtt service: subscription " << sub.name.c_str() << " " << sub.broker.c_str() << ":"
+                     << sub.filter.c_str() << " restored");
+    }
+    else if ( conn || now - startedAt > LEASE )
+    {
+      log(ErrClass::PRIO_WARNING, "attachRestored", "restored subscription " + sub.name + " (" + sub.broker + ":" +
+          sub.filter + ") dropped: " + (conn ? err : std::string("the broker is not configured")));
+      release(it->first, sub);
+      byName.erase(sub.name);
+      it = subs.erase(it);
+      stateDirty = true;
+      continue;
+    }
+    ++it;
+  }
 }
 
 RsMqttService::Subscription *RsMqttService::find(const Variable *req, uint64_t *idOut)
 {
-  std::string id;
-  if ( !getString(req, "id", id) || id.compare(0, idPrefix.size(), idPrefix) != 0 || id.size() == idPrefix.size() )
+  std::string name;
+  if ( !getString(req, "id", name) )
     return nullptr;
-  char *end = nullptr;
-  uint64_t n = std::strtoull(id.c_str() + idPrefix.size(), &end, 10);
-  if ( *end )
+  auto n = byName.find(name);
+  if ( n == byName.end() )
     return nullptr;
-  auto it = subs.find(n);
+  auto it = subs.find(n->second);
   if ( it == subs.end() )
     return nullptr;
-  if ( idOut ) *idOut = n;
+  if ( idOut ) *idOut = n->second;
   return &it->second;
+}
+
+void RsMqttService::erase(uint64_t id)
+{
+  auto it = subs.find(id);
+  if ( it == subs.end() )
+    return;
+  byName.erase(it->second.name);
+  subs.erase(it);
 }
 
 //--------------------------------------------------------------------------------
@@ -206,7 +342,11 @@ vrpc::Status RsMqttService::subscribe(std::shared_ptr<vrpc::ServerContext>, cons
   if ( !getQoS(req, conn->settings.subscribeQoS(), qos) )
     return invalid("qos must be 0, 1 or 2");
 
-  uint64_t id = ++nextId;
+  // a restored id of an earlier run could have the same name (clock set back)
+  uint64_t id;
+  do
+    id = ++nextId;
+  while ( byName.count(idPrefix + std::to_string(id)) );
   std::string filter, err;
   if ( !conn->router.addService(id, topic, qos, filter, err) )
     return invalid("'" + topic + "': " + err);
@@ -214,12 +354,16 @@ vrpc::Status RsMqttService::subscribe(std::shared_ptr<vrpc::ServerContext>, cons
 
   Subscription &sub = subs[id];
   sub.conn = conn;
+  sub.name = idPrefix + std::to_string(id);
+  sub.broker = broker;
   sub.filter = topic;
+  sub.qos = qos;
   sub.binary = getBool(req, "binary", false);
   sub.lastSeen = Clock::now();
-  std::string name = idPrefix + std::to_string(id);
-  DEBUG_DRV_USR1("rsmqtt service: subscription " << name.c_str() << " " << broker.c_str() << ":" << topic.c_str());
-  return reply(resp, "id", new TextVar(name.c_str()));
+  byName[sub.name] = id;
+  stateDirty = true;
+  DEBUG_DRV_USR1("rsmqtt service: subscription " << sub.name.c_str() << " " << broker.c_str() << ":" << topic.c_str());
+  return reply(resp, "id", new TextVar(sub.name.c_str()));
 }
 
 //--------------------------------------------------------------------------------
@@ -232,7 +376,8 @@ vrpc::Status RsMqttService::unsubscribe(std::shared_ptr<vrpc::ServerContext>, co
   if ( sub )
   {
     release(id, *sub);
-    subs.erase(id);
+    erase(id);
+    stateDirty = true;
   }
   return reply(resp, "ok", new BitVar(sub != nullptr));
 }
@@ -246,6 +391,7 @@ vrpc::Status RsMqttService::renew(std::shared_ptr<vrpc::ServerContext>, const Va
   if ( !sub )
     return notFound("unknown subscription");
   sub->lastSeen = Clock::now();
+  sub->restored = false;
   return reply(resp, "ok", new BitVar(true));
 }
 
@@ -304,6 +450,7 @@ void RsMqttService::receive(std::shared_ptr<vrpc::ServerContext> ctx, const Vari
     sender->sendErrorResponse(notFound("unknown subscription"));
     return;
   }
+  sub->restored = false;
 
   double wait = DEFAULT_WAIT;
   getDouble(req, "wait", wait);
@@ -379,6 +526,11 @@ void RsMqttService::release(uint64_t id, Subscription &sub)
     sub.held.reset();
     answer(sub, *h.sender, 0);  // the client's Receive returns, empty
   }
+  if ( !sub.conn )  // restored, its broker is not there (yet)
+  {
+    unattached--;
+    return;
+  }
   std::string filter;
   if ( sub.conn->router.removeService(id, filter) )
     sub.conn->unsubscribe(filter);
@@ -424,10 +576,17 @@ void RsMqttService::workProc()
   ready.clear();
 
   auto now = Clock::now();
+  // the state file: changes are collected, a failed write is tried again
+  if ( stateDirty && now >= nextSave )
+  {
+    stateDirty = !saveState();
+    nextSave = now + SAVE_INTERVAL;
+  }
   if ( subs.empty() || now < nextScan )
     return;
   nextScan = now + SCAN_INTERVAL;
 
+  attachRestored();
   for (auto it = subs.begin(); it != subs.end();)
   {
     Subscription &sub = it->second;
@@ -444,13 +603,17 @@ void RsMqttService::workProc()
     }
     else if ( now - sub.lastSeen > LEASE )
     {
+      // a restored one no client took up (its manager ended meanwhile) ends normally
       size_t lost = sub.queue.size() + sub.dropped;
-      log(lost ? ErrClass::PRIO_WARNING : ErrClass::PRIO_INFO, "workProc",
-          "subscription " + idPrefix + std::to_string(it->first) + " (" + sub.conn->name + ":" + sub.filter +
-          ") dropped: no Receive or Renew for " + std::to_string(LEASE.count()) + " s" +
-          (lost ? ", " + std::to_string(lost) + " message(s) lost" : ""));
+      log(lost && !sub.restored ? ErrClass::PRIO_WARNING : ErrClass::PRIO_INFO, "workProc",
+          (sub.restored ? "restored subscription " : "subscription ") + sub.name + " (" + sub.broker + ":" +
+          sub.filter + ") dropped: " + (sub.restored ? "not resumed" : "no Receive or Renew") + " for " +
+          std::to_string(LEASE.count()) + " s" +
+          (lost ? ", " + std::to_string(lost) + " message(s) " + (sub.restored ? "discarded" : "lost") : ""));
       release(it->first, sub);
+      byName.erase(sub.name);
       it = subs.erase(it);
+      stateDirty = true;
       continue;
     }
     ++it;

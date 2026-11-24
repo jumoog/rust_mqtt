@@ -29,6 +29,7 @@ use mqtt::{Properties, QoS};
 
 use crate::error::*;
 use crate::options::{CompletionEvents, OptionsData};
+use crate::scram::Scram;
 
 /// Kind of an event in the queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,6 +119,23 @@ struct Shared {
     tokens: Mutex<Tokens>,
     tokens_cv: Condvar,
     completion_events: CompletionEvents,
+    /// The SCRAM exchange of the current connect options: every CONNACK,
+    /// also of automatic reconnects, must carry its server signature.
+    scram: Mutex<Option<Arc<Scram>>>,
+    cli: mqtt::AsyncClient,
+}
+
+impl Shared {
+    /// Checks the server signature of a CONNACK (built-in SCRAM). On a
+    /// mismatch the connection is closed: the broker does not know the
+    /// password.
+    fn verify_connack(&self, props: &Properties) -> Result<(), String> {
+        let Some(s) = lock(&self.scram).clone() else { return Ok(()) };
+        s.verify_connack(props.get_bytes(mqtt::PropertyId::AuthenticationData)).map_err(|e| {
+            drop(self.cli.disconnect(None::<mqtt::DisconnectOptions>)); // runs without being awaited
+            format!("{}: {e}", s.mechanism().name())
+        })
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -231,6 +249,8 @@ impl Client {
             tokens: Mutex::new(Tokens::default()),
             tokens_cv: Condvar::new(),
             completion_events: opts.completion_events,
+            scram: Mutex::new(None),
+            cli: cli.clone(),
         });
 
         // The event stream must exist before connecting so nothing is lost.
@@ -319,24 +339,36 @@ impl Client {
     }
 
     pub fn connect(&self) -> FfiResult<u64> {
-        let conn = lock(&self.opts).connect_options()?;
-        let tok = self.cli.try_connect(conn)?;
-        self.track(OpKind::Connect, tok, |rsp, ev| {
-            ev.session_present = rsp.session_present;
-            ev.mqtt_version = rsp.mqtt_version as i32;
-            ev.server_uri = rsp.server_uri;
-            ev.reason_code = rsp.reason_code as u8;
-            ev.properties = rsp.properties;
-        })
+        let conn = lock(&self.opts).connect()?;
+        // in place before the CONNACK can come; a refused connect (one in
+        // progress, already connected) keeps the exchange of the options in use
+        let prev = std::mem::replace(&mut *lock(&self.shared.scram), conn.scram);
+        let tok = match self.cli.try_connect(conn.opts) {
+            Ok(tok) => tok,
+            Err(e) => {
+                *lock(&self.shared.scram) = prev;
+                return Err(e.into());
+            }
+        };
+        self.track_connect(tok)
     }
 
     pub fn reconnect(&self) -> FfiResult<u64> {
         let tok = self.cli.try_reconnect()?;
-        self.track(OpKind::Connect, tok, |rsp, ev| {
+        self.track_connect(tok)
+    }
+
+    fn track_connect(&self, tok: mqtt::ConnectToken) -> FfiResult<u64> {
+        let shared = Arc::clone(&self.shared);
+        self.track(OpKind::Connect, tok, move |rsp, ev| {
             ev.session_present = rsp.session_present;
             ev.mqtt_version = rsp.mqtt_version as i32;
             ev.server_uri = rsp.server_uri;
             ev.reason_code = rsp.reason_code as u8;
+            if let Err(e) = shared.verify_connack(&rsp.properties) {
+                ev.rc = RSMQTT_FAILURE;
+                ev.text = e;
+            }
             ev.properties = rsp.properties;
         })
     }
@@ -517,7 +549,7 @@ fn worker_main(
                     }
                 },
                 ev = events.next() => if let Some(ev) = ev {
-                    shared.push(convert_event(ev));
+                    shared.push(convert_event(&shared, ev));
                 },
                 done = pending.select_next_some() => shared.complete(done),
                 complete => break,
@@ -526,9 +558,16 @@ fn worker_main(
     });
 }
 
-fn convert_event(ev: mqtt::Event) -> Event {
+fn convert_event(shared: &Shared, ev: mqtt::Event) -> Event {
     match ev {
         mqtt::Event::Connected(rsp) => {
+            // a broker that fails the SCRAM check: closed again at once
+            if let Err(text) = shared.verify_connack(&rsp.properties) {
+                let mut e = Event::new(EventKind::ConnectionLost);
+                e.rc = RSMQTT_FAILURE;
+                e.text = text;
+                return e;
+            }
             let mut e = Event::new(EventKind::Connected);
             e.session_present = rsp.session_present;
             e.mqtt_version = rsp.mqtt_version as i32;

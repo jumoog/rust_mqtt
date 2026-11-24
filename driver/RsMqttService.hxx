@@ -24,9 +24,17 @@
 // deadline comes close. A subscription that sees no Receive or Renew for
 // LEASE is dropped (with a warning counting the messages lost), so a CTRL
 // manager that ends without unsubscribing does not leave filters behind; a
-// client whose callbacks run long calls Renew in between. The ids hold the
-// driver's start time: after a restart the old ids are unknown (NotFound)
-// and the client subscribes again.
+// client whose callbacks run long calls Renew in between.
+//
+// The ids hold the start time of the driver run that made them. The
+// subscriptions are kept in a state file (<data>/rsmqtt/service_<num>.state,
+// format in crates/rsmqtt-wincc/src/service.rs): a restarted driver makes
+// them again with their ids as soon as their broker is configured and queues
+// their messages, so the clients resume them with their next Receive. One
+// that no client resumes within LEASE is dropped like any other; an id the
+// driver does not know is NotFound and the client subscribes again. The
+// file is written from workProc, at most every second, so a burst of
+// subscriptions costs one write.
 //
 // Everything runs on the driver's main thread (MSA calls come in through
 // the manager's dispatch, messages through workProc), so no locking.
@@ -63,6 +71,12 @@ class RsMqttService final : public vrpc::ServiceBase<RsMqttService>
                    int qos, bool retained);
     /// Answers held Receive calls and drops expired subscriptions.
     void workProc();
+    /// Writes changes of the subscriptions to the state file now (driver stop).
+    void flushState();
+    /// Subscriptions restored from the state file whose broker is now
+    /// configured: their filters go into its router (before the connection
+    /// delivers messages, so call it before polling the connections).
+    void attachRestored();
 
   private:
     using Clock = std::chrono::steady_clock;
@@ -89,9 +103,14 @@ class RsMqttService final : public vrpc::ServiceBase<RsMqttService>
 
     struct Subscription
     {
-      RsMqttConnection *conn = nullptr;  // connections live until the driver exits
+      RsMqttConnection *conn = nullptr;  // connections live until the driver exits; nullptr: restored,
+                                         // waiting for its broker (attachRestored)
+      std::string name;                  // the client's id
+      std::string broker;
       std::string filter;
+      int  qos = 0;
       bool binary = false;
+      bool restored = false;             // from the state file, no Receive or Renew since
       std::deque<MessagePtr> queue;
       size_t   queueBytes = 0;
       unsigned dropped = 0;  // messages dropped since the last Receive (queue full)
@@ -108,6 +127,12 @@ class RsMqttService final : public vrpc::ServiceBase<RsMqttService>
 
     /// The subscription of a request's "id" (nullptr if unknown).
     Subscription *find(const Variable *req, uint64_t *id = nullptr);
+    /// Removes a subscription (after release()).
+    void erase(uint64_t id);
+    /// Reads the state file (constructor) / writes it (workProc, after
+    /// changes, at most every SAVE_INTERVAL); false if it could not be written.
+    void loadState();
+    bool saveState();
     /// Sends up to `max` queued messages to `sender`.
     void answer(Subscription &sub, vrpc::FunctionResponseSender &sender, unsigned max);
     /// Answers the held Receive of `sub` with what is queued.
@@ -115,7 +140,14 @@ class RsMqttService final : public vrpc::ServiceBase<RsMqttService>
     /// Ends a subscription: its held Receive returns empty, the filter is released.
     void release(uint64_t id, Subscription &sub);
 
-    std::unordered_map<uint64_t, Subscription> subs;
+    std::unordered_map<uint64_t, Subscription> subs;   // by our number, which the router knows
+    std::unordered_map<std::string, uint64_t> byName;  // the clients' ids
+    size_t unattached = 0;        // restored subscriptions waiting for their broker
+    Clock::time_point startedAt;  // restored ones whose broker is missing for LEASE are dropped
+    std::string statePath;
+    bool stateDirty = false;      // subscriptions changed since the state file was written
+    Clock::time_point nextSave;
+    bool stateWarned = false;     // the state file could not be written (logged once)
     std::vector<uint64_t> ready;  // held Receives that got messages
     Clock::time_point nextScan;   // deadlines, cancellations and leases are checked this often
     std::string idPrefix;         // "<start time in ms, hex>-": ids of this driver run

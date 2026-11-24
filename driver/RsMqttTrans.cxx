@@ -61,12 +61,6 @@ bool RsMqttTrans::isSupported(TransformationType t)
   return t >= T::String && t <= T::Blob;
 }
 
-bool RsMqttTrans::isSupportedDyn(TransformationType t)
-{
-  t = normalize(t);
-  return t >= T::String && t <= T::Bool;
-}
-
 TransformationType RsMqttTrans::isA() const { return type; }
 
 int RsMqttTrans::itemSize() const { return (int) (RsMqttResources::getMaxPayload() + 4); }
@@ -148,7 +142,25 @@ PVSSboolean RsMqttTrans::toPeriph(PVSSchar *dataPtr, PVSSulong len, const Variab
     return PVSS_FALSE;
   }
 
-  if ( dyn )
+  if ( dyn && type == T::Blob )
+  {
+    // a JSON array of base64 strings (JSON has no bytes)
+    const DynVar &d = static_cast<const DynVar &>(var);
+    std::vector<std::string_view> items;
+    for (unsigned int i = 0; i < d.getNumberOfItems(); i++)
+    {
+      const Variable *item = d.getAt(i);
+      if ( !item || item->isA() != BLOB_VAR )
+      {
+        convError("toPeriph", CharString("unexpected variable type in dyn_blob item ") + CharString((int) i));
+        return PVSS_FALSE;
+      }
+      const Blob &b = static_cast<const BlobVar *>(item)->getValue();
+      items.emplace_back(reinterpret_cast<const char *>(b.getData()), (size_t) b.getLen());
+    }
+    text = RsMqttJson::dynBlobPayload(items);
+  }
+  else if ( dyn )
   {
     // a JSON array, one element per item
     const DynVar &d = static_cast<const DynVar &>(var);
@@ -225,9 +237,24 @@ Variable *RsMqttTrans::textToItem(std::string_view text, bool jsonString, std::s
 
 VariablePtr RsMqttTrans::toDynVar(std::string_view payload) const
 {
+  std::string err;
+  if ( type == T::Blob )
+  {
+    // base64 strings in JSON, or the payload as one item (json::dyn_blob_items)
+    std::vector<std::string> blobs;
+    if ( !RsMqttJson::dynBlobItems(payload, blobs, err) )
+    {
+      convError("toVar", CharString(err.c_str()) + " in " + shown(payload).c_str());
+      return nullptr;
+    }
+    std::unique_ptr<DynVar> d(new DynVar(BLOB_VAR));
+    for (const auto &b : blobs)
+      d->append(BlobVar(reinterpret_cast<PVSSuchar *>(const_cast<char *>(b.data())), (PVSSulong) b.size(), true));
+    return d.release();
+  }
+
   // a JSON array, one value or nothing (rsmqtt-wincc, json::dyn_items)
   std::vector<std::pair<std::string, bool>> items;
-  std::string err;
   if ( !RsMqttJson::dynItems(payload, items, err) )
   {
     convError("toVar", CharString(err.c_str()) + " in " + shown(payload).c_str());

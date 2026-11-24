@@ -245,6 +245,42 @@ namespace rsmqtt::wincc
       rsmqtt_wincc_items_free(it);
       return true;
     }
+
+    /// The items of a payload for a dyn_blob DPE (base64 strings in JSON,
+    /// crates/rsmqtt-wincc/src/json.rs dyn_blob_items); false and `err` if
+    /// it cannot be read.
+    inline bool dynBlobItems(std::string_view payload, std::vector<std::string> &items, std::string &err)
+    {
+      items.clear();
+      rsmqtt_wincc_items *it = rsmqtt_wincc_dyn_blob_items(payload.data(), payload.size());
+      if ( !it )
+      {
+        err = lastError();
+        return false;
+      }
+      size_t n = rsmqtt_wincc_items_count(it);
+      for (size_t i = 0; i < n; i++)
+      {
+        const char *t = nullptr;
+        size_t len = 0;
+        rsmqtt_wincc_items_get(it, i, &t, &len);
+        items.emplace_back(t ? t : "", len);
+      }
+      rsmqtt_wincc_items_free(it);
+      return true;
+    }
+
+    /// The payload of a dyn_blob DPE: a JSON array of base64 strings.
+    inline std::string dynBlobPayload(const std::vector<std::string_view> &items)
+    {
+      rsmqtt_wincc_items *l = rsmqtt_wincc_blob_list_new();
+      for (auto &i : items)
+        rsmqtt_wincc_blob_list_add(l, i.data(), i.size());
+      rsmqtt_wincc_buf b{};
+      rsmqtt_wincc_dyn_blob_payload(l, &b);
+      rsmqtt_wincc_items_free(l);
+      return take(b);
+    }
   }
 
   //------------------------------------------------------------- redundancy
@@ -843,6 +879,47 @@ namespace rsmqtt::wincc
         return true;
       why = lastError();
       return false;
+    }
+  }
+
+  //----------------------------------------------------------------- service
+
+  /// The state file of the MSA service (crates/rsmqtt-wincc/src/service.rs).
+  namespace service
+  {
+    struct Record
+    {
+      std::string id;
+      int  qos = 0;
+      bool binary = false;
+      std::string broker, filter;
+    };
+
+    inline std::string header()
+    {
+      rsmqtt_wincc_buf b{};
+      rsmqtt_wincc_service_header(&b);
+      return take(b);
+    }
+
+    inline std::string record(const Record &r)
+    {
+      rsmqtt_wincc_buf b{};
+      rsmqtt_wincc_service_record(r.id.c_str(), r.qos, r.binary, r.broker.c_str(), r.filter.c_str(), &b);
+      return take(b);
+    }
+
+    enum class Line { Invalid = 0, Header = 1, Record = 2 };
+
+    /// Reads a line; a Record goes to `rec`.
+    inline Line parse(std::string_view line, Record &rec)
+    {
+      rsmqtt_wincc_buf id{}, broker{}, filter{};
+      int qos = 0, binary = 0;
+      int kind = rsmqtt_wincc_service_parse(line.data(), line.size(), &id, &qos, &binary, &broker, &filter);
+      if ( kind == 2 )
+        rec = Record{take(id), qos, binary != 0, take(broker), take(filter)};
+      return (Line) kind;
     }
   }
 }

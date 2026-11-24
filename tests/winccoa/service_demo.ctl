@@ -25,6 +25,7 @@ const int    DRIVER = 3;
 
 int g_q2Expected = 1;  // number of the next own QoS 2 message
 int g_q2Pass = 0, g_q2Fail = 0;
+dyn_int g_q2Unsent;    // numbers whose publish failed (e.g. while the driver restarted)
 
 void onDemo(string topic, anytype payload, mapping info)
 {
@@ -45,6 +46,8 @@ void onQoS2(string topic, anytype payload, mapping info)
   }
   // own messages: "<n>", each exactly once and in order, with qos 2
   int n = (int) payload;
+  while ( dynContains(g_q2Unsent, g_q2Expected) > 0 )
+    g_q2Expected++;  // never sent: not expected
   bool ok = n == g_q2Expected && info["qos"] == 2 && info["dropped"] == 0;
   if ( ok )
     g_q2Pass++;
@@ -72,6 +75,7 @@ main()
   {
     delay(5);
     rsmqttPublish(BROKER, "demo/tick", "tick " + n, 0, 0, DRIVER);
-    rsmqttPublish(BROKER, "demo_q2/tick", (string) n, 2, 0, DRIVER);
+    if ( rsmqttPublish(BROKER, "demo_q2/tick", (string) n, 2, 0, DRIVER) != 0 )
+      dynAppend(g_q2Unsent, n);
   }
 }

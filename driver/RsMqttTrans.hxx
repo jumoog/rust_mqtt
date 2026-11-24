@@ -7,7 +7,9 @@
 //
 // dyn DPEs (dyn_string, dyn_int, dyn_float, dyn_bool, ...): the data type is
 // the type of the items. Input takes a JSON array (one item per element) or
-// a single value (one item); output is a JSON array.
+// a single value (one item); output is a JSON array. dyn_blob items are
+// base64 strings in JSON; a payload that is no JSON array or string is one
+// item with its bytes as they are.
 #ifndef RSMQTT_TRANS_HXX
 #define RSMQTT_TRANS_HXX
 
@@ -22,8 +24,6 @@ class RsMqttTrans : public Transformation
     explicit RsMqttTrans(TransformationType type, bool dyn = false);
 
     static bool isSupported(TransformationType type);
-    /// Data types a dyn DPE can have (all but blob).
-    static bool isSupportedDyn(TransformationType type);
 
     TransformationType isA() const override;
     int itemSize() const override;

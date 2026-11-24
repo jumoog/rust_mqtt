@@ -9,13 +9,63 @@
 //! directly onto key/value config files such as the WinCC OA config file.
 
 use std::collections::HashMap;
+use std::ffi::CString;
+use std::os::raw::{c_char, c_int, c_void};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use paho_mqtt as mqtt;
-use mqtt::{MqttVersion, Properties, Property, QoS};
+use mqtt::{MqttVersion, Properties, Property, PropertyId, QoS};
 
 use crate::error::*;
+use crate::scram::{Mechanism, Scram};
+
+/// The host's answer to an MQTT v5 enhanced-authentication challenge
+/// (`rsmqtt_auth_callback`): returns 0 after `rsmqtt_auth_reply_set`, or
+/// anything else to abandon the connection. Called on a library thread.
+pub type AuthFn = extern "C" fn(
+    ctx: *mut c_void,
+    method: *const c_char,
+    data: *const c_void,
+    len: usize,
+    reply: *mut AuthReply,
+) -> c_int;
+
+/// The authentication data a callback answers with.
+#[derive(Debug, Default)]
+pub struct AuthReply {
+    pub data: Vec<u8>,
+}
+
+/// A host callback for enhanced authentication.
+#[derive(Debug, Clone, Copy)]
+pub struct AuthCallback {
+    pub func: AuthFn,
+    pub ctx: usize,
+}
+
+impl AuthCallback {
+    fn call(self, method: &str, data: &[u8]) -> mqtt::Result<Vec<u8>> {
+        let m = CString::new(method.replace('\0', " ")).unwrap_or_default();
+        let mut reply = AuthReply::default();
+        let rc = (self.func)(self.ctx as *mut c_void, m.as_ptr(), data.as_ptr() as *const c_void, data.len(), &mut reply);
+        if rc != 0 {
+            return Err(mqtt::Error::GeneralString(format!(
+                "the authentication callback refused the '{method}' challenge ({rc})"
+            )));
+        }
+        Ok(reply.data)
+    }
+}
+
+/// The connect options and, with a built-in SCRAM method, its exchange,
+/// whose server signature the client checks on CONNACK.
+#[derive(Debug)]
+pub struct Connect {
+    pub opts: mqtt::ConnectOptions,
+    pub scram: Option<Arc<Scram>>,
+}
 
 /// How completed operations are reported through the event queue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -97,6 +147,11 @@ pub struct OptionsData {
     pub http_headers: Vec<(String, String)>,
     pub connect_props: Properties,
 
+    // ----- v5 enhanced authentication -----
+    pub auth_method: Option<String>,
+    pub auth_data: Option<Vec<u8>>,
+    pub auth_callback: Option<AuthCallback>,
+
     // ----- will -----
     pub will_topic: Option<String>,
     pub will_payload: Vec<u8>,
@@ -148,6 +203,9 @@ pub const OPTION_NAMES: &[&str] = &[
     "requestresponseinformation",
     "requestprobleminformation",
     "userproperty",
+    // v5 enhanced authentication
+    "auth.method",
+    "auth.data",
     // will
     "will.topic",
     "will.payload",
@@ -181,7 +239,7 @@ pub fn normalize_name(name: &str) -> String {
     // `ssl_trustStore`, `tls-verify`, `will_topic` → dotted form.
     let trimmed = name.trim();
     let mut dotted = String::with_capacity(trimmed.len());
-    for prefix in ["ssl", "tls", "will"] {
+    for prefix in ["ssl", "tls", "will", "auth"] {
         if trimmed.len() > prefix.len() + 1
             && trimmed[..prefix.len()].eq_ignore_ascii_case(prefix)
             && matches!(trimmed.as_bytes()[prefix.len()], b'_' | b'-')
@@ -404,6 +462,10 @@ impl OptionsData {
                 self.connect_props.push_user(k, val);
             }
 
+            // ----- v5 enhanced authentication -----
+            "auth.method" => self.auth_method = opt_string(v.trim()),
+            "auth.data" => self.auth_data = if v.is_empty() { None } else { Some(v.as_bytes().to_vec()) },
+
             // ----- will -----
             "will.topic" => self.will_topic = opt_string(v),
             "will.payload" | "will.message" => self.will_payload = v.as_bytes().to_vec(),
@@ -462,6 +524,7 @@ impl OptionsData {
     pub fn set_binary(&mut self, name: &str, data: &[u8]) -> FfiResult<()> {
         match normalize_name(name).as_str() {
             "password" => self.password = Some(data.to_vec()),
+            "auth.data" => self.auth_data = if data.is_empty() { None } else { Some(data.to_vec()) },
             "will.payload" | "will.message" => self.will_payload = data.to_vec(),
             "ssl.alpn" => {
                 self.ssl.used = true;
@@ -540,6 +603,11 @@ impl OptionsData {
 
     /// Builds the Paho connect options.
     pub fn connect_options(&self) -> FfiResult<mqtt::ConnectOptions> {
+        Ok(self.connect()?.opts)
+    }
+
+    /// Builds the Paho connect options and the SCRAM exchange, if any.
+    pub fn connect(&self) -> FfiResult<Connect> {
         let ver = self.version();
         let ws = self
             .server_uri
@@ -566,10 +634,13 @@ impl OptionsData {
         if let Some(n) = self.max_inflight {
             b.max_inflight(n);
         }
+        let mut props = self.connect_props.clone();
+        let scram = self.enhanced_auth(ver, &mut b, &mut props)?;
         if let Some(u) = &self.username {
             b.user_name(u.clone());
         }
-        if let Some(p) = &self.password {
+        // with SCRAM the password proves itself; it is not sent
+        if let (Some(p), None) = (&self.password, &scram) {
             b.password(p.clone());
         }
         if let Some(t) = self.connect_timeout {
@@ -594,8 +665,8 @@ impl OptionsData {
             let map: HashMap<String, String> = self.http_headers.iter().cloned().collect();
             b.http_headers(map);
         }
-        if ver == MqttVersion::V5 && !self.connect_props.is_empty() {
-            b.properties(self.connect_props.clone());
+        if ver == MqttVersion::V5 && !props.is_empty() {
+            b.properties(props);
         }
 
         if let Some(topic) = &self.will_topic {
@@ -621,7 +692,65 @@ impl OptionsData {
 
         let opts = b.finalize();
         opts.check().map_err(FfiError::from)?;
-        Ok(opts)
+        Ok(Connect { opts, scram })
+    }
+
+    /// MQTT v5 enhanced authentication: `auth.method` (or an
+    /// AuthenticationMethod in the connect properties) with the host's
+    /// callback, or one of the built-in SCRAM methods with `username` and
+    /// `password`.
+    fn enhanced_auth(
+        &self,
+        ver: MqttVersion,
+        b: &mut mqtt::ConnectOptionsBuilder,
+        props: &mut Properties,
+    ) -> FfiResult<Option<Arc<Scram>>> {
+        let bad = |msg: String| FfiError::new(RSMQTT_BAD_MQTT_OPTION, msg);
+        // connect properties go out with v5 only: on v3 their method does not count
+        let from_props = || (ver == MqttVersion::V5).then(|| props.get_string(PropertyId::AuthenticationMethod)).flatten();
+        let method = self.auth_method.clone().or_else(from_props);
+        let Some(method) = method else {
+            if self.auth_data.is_some() {
+                return Err(bad("'auth.data' needs 'auth.method'".into()));
+            }
+            if self.auth_callback.is_some() {
+                return Err(bad("an authentication callback needs 'auth.method'".into()));
+            }
+            return Ok(None);
+        };
+        if ver != MqttVersion::V5 {
+            return Err(bad(format!("'auth.method' ({method}) needs MQTT v5")));
+        }
+        if let Some(cb) = self.auth_callback {
+            // the host's callback answers every method, also SCRAM
+            set_prop(props, Property::AuthenticationMethod(method.clone()));
+            if let Some(d) = &self.auth_data {
+                set_prop(props, Property::AuthenticationData(d.clone().into()));
+            }
+            b.auth_handler(move |ch| cb.call(ch.method, ch.data));
+            return Ok(None);
+        }
+        let Some(mech) = Mechanism::parse(&method) else {
+            return Err(bad(format!(
+                "authentication method '{method}' is not built in (SCRAM-SHA-1, SCRAM-SHA-256, SCRAM-SHA-512); \
+                 others need an authentication callback"
+            )));
+        };
+        if self.auth_data.is_some() {
+            return Err(bad(format!("'auth.data' is not used with {}", mech.name())));
+        }
+        let (Some(user), Some(password)) = (&self.username, &self.password) else {
+            return Err(bad(format!("{} needs 'username' and 'password'", mech.name())));
+        };
+        let s = Arc::new(Scram::new(mech, user, password).map_err(|e| FfiError::new(RSMQTT_FAILURE, e))?);
+        set_prop(props, Property::AuthenticationMethod(mech.name().into()));
+        set_prop(props, Property::AuthenticationData(s.client_first().into()));
+        let h = Arc::clone(&s);
+        b.auth_handler(move |ch| {
+            h.respond(ch.data)
+                .map_err(|e| mqtt::Error::GeneralString(format!("{}: {e}", h.mechanism().name())))
+        });
+        Ok(Some(s))
     }
 
     fn tls_options(&self) -> mqtt::TlsOptions {
@@ -756,6 +885,62 @@ mod tests {
         assert_eq!(o.set("will.qos", "3").unwrap_err().rc, RSMQTT_BAD_QOS);
         assert_eq!(o.set("cleansession", "maybe").unwrap_err().rc, RSMQTT_BAD_MQTT_OPTION);
         assert_eq!(o.set("bogus", "1").unwrap_err().rc, RSMQTT_UNKNOWN_OPTION);
+    }
+
+    #[test]
+    fn enhanced_auth() {
+        let opts = |pairs: &[(&str, &str)]| {
+            let mut o = OptionsData::default();
+            o.set("serverURI", "tcp://localhost:1883").unwrap();
+            for (n, v) in pairs {
+                o.set(n, v).unwrap();
+            }
+            o
+        };
+        // built-in SCRAM: method and client-first message in CONNECT, the password stays here
+        let o = opts(&[("auth.method", "scram-sha-256"), ("username", "u"), ("password", "secret")]);
+        let c = o.connect().unwrap();
+        assert!(c.scram.is_some());
+        assert_eq!(c.opts.password, None);
+        assert_eq!(c.opts.user_name.as_deref(), Some("u"));
+        assert_eq!(c.opts.props.get_str(PropertyId::AuthenticationMethod), Some("SCRAM-SHA-256"));
+        let first = c.opts.props.get_bytes(PropertyId::AuthenticationData).unwrap();
+        assert!(first.starts_with(b"n,,n=u,r="));
+
+        let err = |pairs: &[(&str, &str)]| opts(pairs).connect().unwrap_err().message;
+        assert!(err(&[("auth.method", "SCRAM-SHA-1"), ("username", "u")]).contains("needs 'username' and 'password'"));
+        assert!(err(&[("auth.method", "SCRAM-SHA-1"), ("username", "u"), ("password", "p"), ("MQTTVersion", "4")])
+            .contains("needs MQTT v5"));
+        assert!(err(&[("auth.method", "KERBEROS")]).contains("not built in"));
+        assert!(err(&[("auth.data", "x")]).contains("needs 'auth.method'"));
+        extern "C" fn none(_: *mut c_void, _: *const c_char, _: *const c_void, _: usize, _: *mut AuthReply) -> c_int {
+            0
+        }
+        let mut o = opts(&[]);
+        o.auth_callback = Some(AuthCallback { func: none, ctx: 0 });
+        assert!(o.connect().unwrap_err().message.contains("callback needs 'auth.method'"));
+        assert!(err(&[("auth.method", "SCRAM-SHA-1"), ("username", "u"), ("password", "p"), ("auth_data", "x")])
+            .contains("not used with SCRAM-SHA-1"));
+
+        // a host callback: any method, auth.data as the initial data, the password is sent as usual
+        extern "C" fn cb(_: *mut c_void, _: *const c_char, _: *const c_void, _: usize, _: *mut AuthReply) -> c_int {
+            0
+        }
+        let mut o = opts(&[("auth.method", "KERBEROS"), ("auth.data", "ticket"), ("password", "p")]);
+        o.auth_callback = Some(AuthCallback { func: cb, ctx: 0 });
+        let c = o.connect().unwrap();
+        assert!(c.scram.is_none());
+        assert_eq!(c.opts.password.as_deref(), Some(&b"p"[..]));
+        assert_eq!(c.opts.props.get_str(PropertyId::AuthenticationMethod), Some("KERBEROS"));
+        assert_eq!(c.opts.props.get_bytes(PropertyId::AuthenticationData), Some(&b"ticket"[..]));
+        // the method may also come from the connect properties, which v3 ignores
+        o.auth_method = None;
+        o.connect_props.push(Property::AuthenticationMethod("X".into()));
+        o.connect().unwrap();
+        o.auth_callback = None;
+        o.auth_data = None;
+        o.set("MQTTVersion", "4").unwrap();
+        assert!(o.connect().unwrap().scram.is_none());
     }
 
     #[test]

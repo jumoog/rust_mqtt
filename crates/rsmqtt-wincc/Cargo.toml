@@ -1,6 +1,6 @@
 [package]
 name = "rsmqtt-wincc"
-description = "WinCC OA driver logic of rsmqtt: address syntax, JSON paths, Sparkplug B host application, redundancy names"
+description = "WinCC OA driver logic of rsmqtt: address syntax, JSON paths, Sparkplug B host application, redundancy names, message routing, MSA service state"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

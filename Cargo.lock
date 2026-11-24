@@ -820,6 +820,7 @@ dependencies = [
  "futures",
  "log",
  "paho-mqtt",
+ "ring",
  "tempfile",
 ]
 

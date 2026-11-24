@@ -220,6 +220,14 @@ public:
     return *this;
   }
 
+  /// MQTT v5 enhanced authentication for a method that is not built in (see
+  /// rsmqtt_auth_callback in rsmqtt.h): called on a library thread during
+  /// connect. The C function gets `ctx`; it must outlive the client.
+  Options &authCallback(rsmqtt_auth_callback cb, void *ctx) {
+    check(rsmqtt_options_set_auth_callback(o_, cb, ctx));
+    return *this;
+  }
+
   static bool isKnown(const std::string &name) { return rsmqtt_option_is_known(name.c_str()) != 0; }
 
   const rsmqtt_options *get() const { return o_; }

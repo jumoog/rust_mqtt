@@ -506,3 +506,106 @@ fn offline_buffering_delivers_after_connect() {
     assert_eq!(msgs.len(), 1);
     assert_eq!(msgs[0].payload, b"buffered");
 }
+
+
+// ----- MQTT v5 enhanced authentication (SCRAM)
+//
+// Need a broker with SCRAM authentication: RSMQTT_TEST_SCRAM_URI plus
+// RSMQTT_TEST_SCRAM_USER / RSMQTT_TEST_SCRAM_PASSWORD (SCRAM-SHA-256), e.g.
+// EMQX with EMQX_AUTHENTICATION__1__MECHANISM=scram (see the README).
+
+fn scram_env() -> Option<(String, String, String)> {
+    let get = |n: &str| std::env::var(n).ok().filter(|s| !s.is_empty());
+    Some((get("RSMQTT_TEST_SCRAM_URI")?, get("RSMQTT_TEST_SCRAM_USER")?, get("RSMQTT_TEST_SCRAM_PASSWORD")?))
+}
+
+/// Connects and returns the result code of the connect.
+fn try_connect(cli: &Cli) -> i32 {
+    unsafe {
+        let mut tok = 0;
+        let rc = rsmqtt_connect(cli.0, &mut tok);
+        if rc != 0 {
+            return rc;
+        }
+        rsmqtt_wait_for_completion(cli.0, tok, 15_000)
+    }
+}
+
+#[test]
+fn scram_built_in() {
+    let Some((server, user, password)) = scram_env() else { return };
+    let topic = unique("rsmqtt/test/scram");
+    let cli = Cli::new(&[
+        ("serverURI", &server),
+        ("clientId", &unique("scram")),
+        ("MQTTVersion", "5"),
+        ("auth.method", "SCRAM-SHA-256"),
+        ("username", &user),
+        ("password", &password),
+    ]);
+    assert_eq!(try_connect(&cli), 0, "SCRAM connect: {}", last_error());
+    cli.subscribe(&topic, 1);
+    cli.publish(&topic, b"authenticated", 1, ptr::null());
+    let msgs = cli.messages(1, Duration::from_secs(10));
+    assert_eq!(msgs.first().map(|m| m.payload.as_slice()), Some(&b"authenticated"[..]));
+    cli.disconnect();
+
+    // a wrong password: the broker refuses the client's proof
+    let bad = Cli::new(&[
+        ("serverURI", &server),
+        ("clientId", &unique("scram")),
+        ("MQTTVersion", "5"),
+        ("auth.method", "SCRAM-SHA-256"),
+        ("username", &user),
+        ("password", "wrong"),
+    ]);
+    let rc = try_connect(&bad);
+    assert_ne!(rc, 0, "a wrong password must not connect");
+    // without enhanced authentication the broker does not accept the user
+    let plain = Cli::new(&[("serverURI", &server), ("clientId", &unique("scram")), ("MQTTVersion", "5"),
+                          ("username", &user), ("password", &password)]);
+    assert_ne!(try_connect(&plain), 0, "the broker must require SCRAM for this test");
+}
+
+/// A host callback that answers with the library's own SCRAM code: the
+/// callback path end to end.
+extern "C" fn scram_callback(
+    ctx: *mut std::os::raw::c_void,
+    method: *const c_char,
+    data: *const std::os::raw::c_void,
+    len: usize,
+    reply: *mut rsmqtt::options::AuthReply,
+) -> i32 {
+    unsafe {
+        let s = &*(ctx as *const rsmqtt::scram::Scram);
+        assert_eq!(CStr::from_ptr(method).to_str().unwrap(), "SCRAM-SHA-256");
+        let data = if len == 0 { &[][..] } else { std::slice::from_raw_parts(data as *const u8, len) };
+        match s.respond(data) {
+            Ok(answer) => rsmqtt_auth_reply_set(reply, answer.as_ptr().cast(), answer.len()),
+            Err(_) => 1,
+        }
+    }
+}
+
+#[test]
+fn auth_callback() {
+    let Some((server, user, password)) = scram_env() else { return };
+    let scram = Box::new(rsmqtt::scram::Scram::new(rsmqtt::scram::Mechanism::Sha256, &user, password.as_bytes()).unwrap());
+    let first = scram.client_first();
+    unsafe {
+        let o = rsmqtt_options_new();
+        for (k, v) in [("serverURI", server.as_str()), ("clientId", &unique("authcb")), ("MQTTVersion", "5"),
+                       ("auth.method", "SCRAM-SHA-256"), ("username", &user)] {
+            assert_eq!(rsmqtt_options_set(o, c(k).as_ptr(), c(v).as_ptr()), 0, "{k}: {}", last_error());
+        }
+        assert_eq!(rsmqtt_options_set_binary(o, c("auth.data").as_ptr(), first.as_ptr().cast(), first.len()), 0);
+        let ctx = &*scram as *const rsmqtt::scram::Scram as *mut std::os::raw::c_void;
+        assert_eq!(rsmqtt_options_set_auth_callback(o, Some(scram_callback), ctx), 0);
+        let mut cli = ptr::null_mut();
+        assert_eq!(rsmqtt_client_create(o, &mut cli), 0, "{}", last_error());
+        rsmqtt_options_free(o);
+        let cli = Cli(cli);
+        assert_eq!(try_connect(&cli), 0, "callback connect: {}", last_error());
+        cli.disconnect();
+    }
+}

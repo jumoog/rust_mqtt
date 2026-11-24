@@ -17,9 +17,11 @@
 
 #![allow(clippy::missing_safety_doc)]
 
+pub mod base64;
 pub mod client;
 pub mod error;
 pub mod options;
+pub mod scram;
 mod trace;
 
 use std::ffi::{CStr, CString};
@@ -308,6 +310,34 @@ pub unsafe extern "C" fn rsmqtt_options_set_properties(
             PROPS_WILL => o.will_props = p,
             _ => return Err(FfiError::new(RSMQTT_INVALID_ARGUMENT, "invalid property list selector")),
         }
+        Ok(())
+    })
+}
+
+/// Answers MQTT v5 enhanced-authentication challenges (`auth.method`) with
+/// the host's callback instead of the built-in SCRAM methods. Unlike every
+/// other callback of the library it is called on a library thread during
+/// connect, and the connect waits for it: it must answer quickly and must
+/// not call into the client. NULL removes it.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_options_set_auth_callback(
+    opts: *mut RsmqttOptions,
+    cb: Option<options::AuthFn>,
+    ctx: *mut c_void,
+) -> c_int {
+    guard(|| {
+        let o = obj_mut(opts, "options")?;
+        o.auth_callback = cb.map(|func| options::AuthCallback { func, ctx: ctx as usize });
+        Ok(())
+    })
+}
+
+/// Sets the authentication data an auth callback answers with (copied).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_auth_reply_set(reply: *mut options::AuthReply, data: *const c_void, len: usize) -> c_int {
+    guard(|| {
+        let r = obj_mut(reply, "reply")?;
+        r.data = bytes(data, len)?.to_vec();
         Ok(())
     })
 }

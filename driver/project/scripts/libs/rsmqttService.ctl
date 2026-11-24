@@ -17,8 +17,10 @@
 // rsmqttTopicConnect(), one message after the other, in the order the
 // driver received them. Messages that arrive while it runs are queued in the
 // driver (up to 10000 messages or 64 MB per subscription, then the oldest are
-// dropped and info["dropped"] counts them). If the driver restarts, the
-// subscription is made again automatically.
+// dropped and info["dropped"] counts them). If the driver restarts, it
+// restores the subscription and the callback gets the messages that arrived
+// meanwhile (see the README for what the broker keeps while the driver is
+// down); if it cannot, the subscription is made again automatically.
 
 #uses "vrpc"
 #uses "rsmqtt"
@@ -30,6 +32,7 @@ const int    RSMQTT_CALL_TIMEOUT   = 10;    // s for Subscribe / Unsubscribe / R
 const int    RSMQTT_RETRY_DELAY    = 2;     // s between attempts while the driver is not reachable
 const int    RSMQTT_RENEW_INTERVAL = 30;    // s: long callback runs renew the subscription (the driver drops it after 120 s)
 const int    RSMQTT_DRIVER_CACHE   = 30;    // s a broker's driver number is cached
+const int    RSMQTT_UNSUBSCRIBE_RETRY = 300;  // s a failed Unsubscribe is tried again (driver not running, busy)
 
 // handle -> mapping(broker, topic, qos?, binary, driver, callback, id) of
 // rsmqttTopicConnect(); id: the subscription in the driver ("" = none)
@@ -102,8 +105,11 @@ int rsmqttTopicDisconnect(int handle)
     t = g_rsmqttTopics[handle];
     mappingRemove(g_rsmqttTopics, handle);
   }
-  // also ends the Receive the loop waits for
-  _rsmqttUnsubscribe(t["driver"], t["id"]);
+  // also ends the Receive the loop waits for. If the call fails (driver not
+  // running, busy) a thread tries again, or the subscription would live on
+  // in the driver (and a restarted driver would restore it).
+  if ( _rsmqttUnsubscribeFailed(_rsmqttUnsubscribe(t["driver"], t["id"])) )
+    startThread("_rsmqttUnsubscribeLater", t["driver"], t["id"]);
   return 0;
 }
 
@@ -233,13 +239,35 @@ int _rsmqttServiceSubscribe(const mapping &t, string &id, string &err)
   return rc;
 }
 
-void _rsmqttUnsubscribe(int driverNum, string id)
+/** Ends a subscription in the driver: 0 or the status code. */
+int _rsmqttUnsubscribe(int driverNum, string id)
 {
   if ( id == "" )
-    return;
+    return 0;
   anytype resp;
   string err;
-  _rsmqttServiceCall(driverNum, "Unsubscribe", makeMapping("id", id), resp, err, RSMQTT_CALL_TIMEOUT);
+  return _rsmqttServiceCall(driverNum, "Unsubscribe", makeMapping("id", id), resp, err, RSMQTT_CALL_TIMEOUT);
+}
+
+/** TRUE if an Unsubscribe must be tried again: it failed, and not because
+  the driver does not know the id (then there is nothing left to end). */
+bool _rsmqttUnsubscribeFailed(int rc)
+{
+  return rc != 0 && rc != (int) VrpcStatusCode::NotFound;
+}
+
+/** An Unsubscribe that failed (driver not running, busy): tried again until
+  the driver answers or RSMQTT_UNSUBSCRIBE_RETRY passes (by then the driver
+  has dropped the subscription itself, as no one asked for its messages). */
+void _rsmqttUnsubscribeLater(int driverNum, string id)
+{
+  time until = getCurrentTime() + RSMQTT_UNSUBSCRIBE_RETRY;
+  while ( getCurrentTime() < until )
+  {
+    delay(RSMQTT_RETRY_DELAY);
+    if ( !_rsmqttUnsubscribeFailed(_rsmqttUnsubscribe(driverNum, id)) )
+      return;
+  }
 }
 
 /** The driver id of a handle; FALSE if the handle was disconnected. */
@@ -356,8 +384,11 @@ void _rsmqttTopicLoop(int handle)
                                 resp, err, RSMQTT_RECEIVE_WAIT + 5);
     if ( rc != 0 )
     {
-      // driver restarted (NotFound) or not reachable: subscribe again
-      if ( rc == (int) VrpcStatusCode::NotFound || rc == (int) VrpcStatusCode::Unavailable )
+      // the driver does not know the id (it dropped the subscription, or it
+      // restarted without restoring it): subscribe again. While it is not
+      // reachable the id is kept: a restarted driver restores the
+      // subscription with its id and the messages queued meanwhile.
+      if ( rc == (int) VrpcStatusCode::NotFound )
         _rsmqttTopicSetId(handle, "", id);
       // the first NotFound subscribes again at once; more in a row (e.g.
       // calls answered by different drivers) are slowed down

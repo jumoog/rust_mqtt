@@ -16,9 +16,12 @@ Two parts:
 - Offline buffering (`sendWhileDisconnected`, `maxBufferedMessages`, `deleteOldestMessages`), `maxInflight`
 - Persistence: none, memory or file (`persistenceDir`)
 - MQTT v5: all properties, reason codes, subscription options (no-local, retain-as-published, retain handling), shared subscriptions, session expiry, user properties
+- MQTT v5 enhanced authentication: SCRAM-SHA-1/256/512 built in (`auth.method`), other methods through a callback (`rsmqtt_options_set_auth_callback`)
 - Option names are the Paho C struct field names, and return codes -1…-18 match `MQTTASYNC_*`
 
-Not supported: TLS-PSK and password-protected private keys (rustls can't handle either), and enhanced (AUTH) authentication through the C API.
+Not supported: TLS-PSK and password-protected private keys (rustls can't handle either).
+
+Enhanced authentication: `auth.method=SCRAM-SHA-256` (or `-1`, `-512`; MQTT v5 only) takes the credentials from `username` and `password`. The password is not sent, and the connect fails unless the broker's CONNACK proves that it knows the password (the server signature); the check is repeated on every automatic reconnect. Up to 1,000,000 PBKDF2 iterations are accepted, and the password is used without SASLprep (the same for ASCII). For other methods (Kerberos, a vendor's token scheme), `rsmqtt_options_set_auth_callback()` answers the broker's AUTH challenges, with `auth.data` as the data of CONNECT. It is called on a library thread while the connect waits, the one exception to the polling model, so it must answer quickly and must not call into the client; once set it answers the SCRAM methods too, and then the library does not check the server signature (the callback never sees the CONNACK). A CONNACK whose server signature is wrong ends the connection, also on an automatic reconnect, which then stops: the reason is reported as a lost connection, and the client stays disconnected until the host connects again.
 
 ## Library model
 
@@ -153,7 +156,7 @@ rsmqttCreateBroker("cloud", 2, "mqtts://mqtt.example.com:8883",
 
 #### Encrypted passwords
 
-`Config.Password`, a `password=...` entry of `Config.Options` and `password` in the config file can hold a password encrypted with `_DriverSecurity.PublicKey`. The driver decrypts it with `config/driver_private.key`, which it looks for in the project, then the sub projects, then the installation. Plain text passwords still work.
+`Config.Password`, a `password=...` or `auth.data=...` entry of `Config.Options` and `password` in the config file can hold a password encrypted with `_DriverSecurity.PublicKey`. The driver decrypts it with `config/driver_private.key`, which it looks for in the project, then the sub projects, then the installation. Plain text passwords still work.
 
 - `rsmqttCreateBroker()` / `rsmqttSetBrokerConfig()` and the broker panel encrypt a plain `Password` automatically. The panel shows `*****` for a stored password. If `_DriverSecurity.PublicKey` is empty, the password is stored unencrypted, with a warning in the log.
 - `rsmqttEncryptPassword("secret")` returns the encrypted text, e.g. for the config file. It uses CTRL `encrypt(..., "ENVELOPE_RSA_AES_256_CBC")` and works in every manager.
@@ -213,10 +216,11 @@ rsmqttSetAddress("Pump1.hum",      "plant:line1/pump1;json=data.hum;ts=data.time
 | 1007 | bool | `true/false`, `1/0`, `on/off`, `yes/no`; published as `true`/`false` |
 | 1008 | blob | raw bytes |
 
-dyn elements (`dyn_string`, `dyn_int`, `dyn_uint`, `dyn_long`, `dyn_ulong`, `dyn_float`, `dyn_bool`) work with the same data types 1001..1007, which then give the type of the items; the driver recognizes the dyn element by itself. `dyn_blob` is not supported.
+dyn elements (`dyn_string`, `dyn_int`, `dyn_uint`, `dyn_long`, `dyn_ulong`, `dyn_float`, `dyn_bool`, `dyn_blob`) work with the same data types 1001..1008, which then give the type of the items; the driver recognizes the dyn element by itself.
 
 - Input: a JSON array gives one item per array element (`[1.5, 2, -3e2]`, `["a", "b"]`; for a `dyn_string` numbers become their text and objects their JSON text). A single value gives one item, JSON (`42.5`, `"text"`) or not (`hello`). An empty payload or `[]` empties the element. If an item cannot be converted, or is `null`, the element keeps its value and the driver logs a warning.
 - Output: always a JSON array, e.g. `[1.5,2,-300]` or `["a","b\"c"]`; an empty element publishes `[]`.
+- `dyn_blob`: JSON has no bytes, so the items are base64 strings (RFC 4648, padding optional on input): `["Zm9v","AP/+"]` both ways, and a single JSON string is one item. A payload that is no JSON array, string or `null` (e.g. raw binary data) is one item with its bytes as they are. Sparkplug `Bytes` / `File` metrics belong on a `blob` element, not a `dyn_blob`.
 - With `json=<path>` the array is taken from, or published at, that path: `json=data.values` reads `{"data":{"values":[1,2,3]}}`. A JSON string at the path is one item, even if its text looks like an array.
 
 Driver defaults for every connection, all of which can be overridden: `automaticReconnect=1`, `sendWhileDisconnected=1`, `maxBufferedMessages=10000`, `deleteOldestMessages=1`, and only failed operations are reported (`completionEvents=errors`).
@@ -230,6 +234,7 @@ Where options behave differently from Paho C (paho.mqtt.rust with rustls):
 - Encrypted private keys (`ssl.privateKeyPassword`) are not supported; the connection fails with a clear error.
 - `httpProxy` / `httpsProxy` apply to `ws://` / `wss://` only; `tcp://` and `ssl://` connect directly.
 - MQTT 5: `CleanSession=FALSE` keeps the session only together with `sessionExpiryInterval=<s>` in `Config.Options` (the expiry defaults to 0, so the session ends with the connection).
+- MQTT 5 enhanced authentication: `auth.method=SCRAM-SHA-256` (or `SCRAM-SHA-1`, `SCRAM-SHA-512`) in `Config.Options` authenticates with `Config.Username` / `Config.Password` by SCRAM; the password never goes to the broker. A broker that cannot prove it knows the password (wrong server signature) is disconnected, and the driver does not retry it on its own: `State.LastError` says why, and a change of `Config` connects again. Methods other than SCRAM need a C callback and are not available in the driver.
 
 ### Sparkplug B
 
@@ -291,7 +296,7 @@ main()
 - The callback runs in a thread of the script that called `rsmqttTopicConnect()`, one message after the other in the order they arrived. An error in the callback is logged and the next message is delivered. Retained messages arrive when the subscription starts, with `info["retained"] == TRUE`: every new subscription sends SUBSCRIBE, also for a filter the driver already uses, so addresses and other callbacks on that filter get its retained messages again.
 - `rsmqttTopicDisconnect(handle)` ends a subscription, `rsmqttTopicHandles()` lists those of the manager.
 - `rsmqttPublish(broker, topic, payload, qos = -1, retain = -1, driverNum = 0)` publishes a string or blob (-1: the broker's `PublishQoS` / `PublishRetain`); 0 means the MQTT client took the message, -1 an error (logged). Like the driver's outputs, payloads above `maxPayload` are refused, and so is publishing on the passive host of a redundant pair (unless `passiveDriverWrites` is set). The broker's driver number is cached for 30 s; in a callback, `info["driver"]` can be passed.
-- If the driver is not running, `rsmqttTopicConnect()` and `rsmqttPublish()` fail with status 14 ("Service is not available"). If the driver restarts, every subscription is made again within a few seconds; messages that arrive in between are lost.
+- If the driver is not running, `rsmqttTopicConnect()` and `rsmqttPublish()` fail with status 14 ("Service is not available"). If the driver restarts, it resumes the subscriptions: it keeps them in `<project>/data/rsmqtt/service_<num>.state` and makes them again with their ids as soon as their broker is configured, and the callbacks get the messages queued since. Messages published while the driver is down reach it only if the broker keeps them: a persistent session (`CleanSession` FALSE, with MQTT 5 also `sessionExpiryInterval`; the default client id stays the same across restarts) and QoS 1 or 2. A restored subscription that no manager resumes within 120 s is dropped (a `rsmqttTopicDisconnect()` whose call fails, e.g. while the driver is down, keeps trying to unsubscribe for 5 minutes); if the state file is missing or cannot be written, the library subscribes again and messages that arrive in between are lost.
 
 How it works: vRPC in 3.21 has request/response functions only (`Subscribe`, `Receive`, `Renew`, `Unsubscribe`, `Publish`, each with a mapping). The driver adds the filter to its connection (shared with the addresses on the same filter) and queues matching messages; a thread of the library calls `Receive`, which the driver holds until messages arrive or 10 s pass (long poll). Up to 10000 messages or 64 MB of payload are queued per subscription; beyond that the oldest are dropped and `info["dropped"]` of the next message says how many. A subscription without a `Receive` or `Renew` for 120 s is dropped (with a warning in the log that counts the messages lost), so a manager that ends without disconnecting leaves nothing behind. While callbacks work through a batch of messages, the library calls `Renew` every 30 s, so one callback call must not take longer than 2 minutes. Your own client can call the service with `VrpcStub` (`classes/msa/vrpc`), see [RsMqttService.hxx](driver/RsMqttService.hxx).
 
@@ -316,7 +321,17 @@ docker run -d --name rsmqtt-mosq -p 18830:1883 -p 18831:9001 -v "${PWD}\tests\mo
 $env:RSMQTT_TEST_URI="tcp://localhost:18830"; $env:RSMQTT_TEST_WS_URI="ws://localhost:18831"; cargo test
 ```
 
-The broker tests cover v3.1, v3.1.1 and v5 round trips at QoS 0–2, WebSocket, TLS (when `RSMQTT_TEST_TLS_URI` and `RSMQTT_TEST_CA` are set), v5 properties and subscription options, will messages, retained messages, offline buffering and error codes. `cargo test -p rsmqtt-wincc` tests the driver logic (addresses, JSON, dyn lists, redundancy names, Sparkplug decoding and commands) without a broker. [examples/cpp](examples/cpp) has a C++ publish/subscribe example and `wincc_test`, which checks that values, strings with NUL bytes, errors and handles cross the `rsmqtt_wincc` C ABI.
+The broker tests cover v3.1, v3.1.1 and v5 round trips at QoS 0–2, WebSocket, TLS (when `RSMQTT_TEST_TLS_URI` and `RSMQTT_TEST_CA` are set), v5 properties and subscription options, will messages, retained messages, offline buffering and error codes. SCRAM (built in and through the callback) needs a broker with SCRAM authentication, e.g. EMQX:
+
+```powershell
+docker run -d --name rsmqtt-emqx -p 18860:1883 -p 18868:18083 -e EMQX_AUTHENTICATION__1__MECHANISM=scram -e EMQX_AUTHENTICATION__1__BACKEND=built_in_database -e EMQX_AUTHENTICATION__1__ALGORITHM=sha256 emqx/emqx:5.8.6
+```
+
+Add a user in the dashboard (http://localhost:18868, admin / public: Access Control, Authentication, Users) or with its REST API, then:
+
+```powershell
+$env:RSMQTT_TEST_SCRAM_URI="tcp://localhost:18860"; $env:RSMQTT_TEST_SCRAM_USER="scramuser"; $env:RSMQTT_TEST_SCRAM_PASSWORD="<password>"; cargo test -p rsmqtt --test broker scram auth_callback
+``` `cargo test -p rsmqtt-wincc` tests the driver logic (addresses, JSON, dyn lists, redundancy names, Sparkplug decoding and commands, the state file of the MSA service) without a broker. [examples/cpp](examples/cpp) has a C++ publish/subscribe example and `wincc_test`, which checks that values, strings with NUL bytes, errors and handles cross the `rsmqtt_wincc` C ABI.
 
 ### Connection option tests in WinCC OA
 
@@ -347,7 +362,7 @@ anytype res; evalScript(res, src, makeDynString(), "tls"); return res;
 | `v5` | CONNECT properties, `maximumPacketSize` |
 | `spb` | Sparkplug B: STATE and will, NBIRTH/DBIRTH with all value kinds, NDATA by alias, DDATA, seq gap -> rebirth, NCMD/DCMD writes, DDEATH/NDEATH (bdSeq) -> invalid, rebirth -> valid |
 | `redu` | redundancy on host 1: `redu.*` options checked but not applied, unknown `redu.*` option |
-| `dyn` | dyn_float / int / long / string / bool from JSON arrays and single values, `[]`, bad items, arrays at a JSON path, JSON array output |
+| `dyn` | dyn_float / int / long / string / bool from JSON arrays and single values, `[]`, bad items, arrays at a JSON path, JSON array output; dyn_blob as base64 arrays and strings (also at a JSON path), raw payloads and output |
 | `json` | `json=` paths (nested, array, quoted name, whole payload), string escapes, objects as text, `ts=` as ISO 8601 and epoch ms, non-JSON payloads, JSON output with timestamp |
 | `session` | clean session / clean start with and without session expiry |
 | `buffer` | keep alive detects a hung broker, automatic reconnect, `maxBufferedMessages` + `deleteOldestMessages` |

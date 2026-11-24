@@ -76,7 +76,7 @@ pub type Reveal<'a> = dyn FnMut(&str) -> Result<String, String> + 'a;
 
 /// Options whose value may be encrypted with `_DriverSecurity.PublicKey`.
 pub fn is_secret_option(name: &str) -> bool {
-    normalize_name(name) == "password"
+    matches!(normalize_name(name).as_str(), "password" | "auth.data")
 }
 
 fn is_spb_host_id(name: &str) -> bool {

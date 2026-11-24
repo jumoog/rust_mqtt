@@ -177,6 +177,7 @@ void        rsmqtt_set_trace_callback(int level, rsmqtt_trace_fn cb, void *ctx);
  *                  will.delayInterval will.messageExpiryInterval
  *                  will.contentType will.responseTopic
  *                  will.payloadFormatIndicator will.userProperty
+ * v5 enhanced authentication: auth.method auth.data (see rsmqtt_auth_callback)
  * TLS (ssl.|tls.): ssl.trustStore ssl.keyStore ssl.privateKey
  *                  ssl.privateKeyPassword ssl.enabledCipherSuites
  *                  ssl.enableServerCertAuth ssl.verify ssl.CApath
@@ -188,12 +189,33 @@ rsmqtt_options *rsmqtt_options_new(void);
 rsmqtt_options *rsmqtt_options_clone(const rsmqtt_options *opts);
 void            rsmqtt_options_free(rsmqtt_options *opts);
 int             rsmqtt_options_set(rsmqtt_options *opts, const char *name, const char *value);
-/* binary values: "password", "will.payload", "ssl.alpn" (ALPN wire format) */
+/* binary values: "password", "auth.data", "will.payload", "ssl.alpn" (ALPN wire format) */
 int             rsmqtt_options_set_binary(rsmqtt_options *opts, const char *name,
                                           const void *data, size_t len);
 int             rsmqtt_options_set_properties(rsmqtt_options *opts, int which,
                                               const rsmqtt_properties *props);
 int             rsmqtt_option_is_known(const char *name);
+
+/* MQTT v5 enhanced authentication (AUTH packets, needs MQTTVersion 5).
+ *
+ * auth.method = SCRAM-SHA-1 | SCRAM-SHA-256 | SCRAM-SHA-512 is built in: the
+ * credentials are "username" and "password" (the password is not sent), and
+ * the connect fails if the broker's CONNACK does not prove that it knows the
+ * password. Other methods need a callback; it answers every method, the
+ * built-in ones included, once it is set. "auth.data" is the authentication
+ * data of CONNECT (for a callback's method; text, or binary with
+ * rsmqtt_options_set_binary).
+ *
+ * The callback gets each AUTH challenge of the broker (method, data) and
+ * answers with rsmqtt_auth_reply_set(reply, ...) and 0; anything else
+ * abandons the connect. It is called on a library thread while the connect
+ * waits (the one exception to "no calls from library threads"): answer
+ * quickly and do not call into the client. */
+typedef struct rsmqtt_auth_reply rsmqtt_auth_reply;
+typedef int (*rsmqtt_auth_callback)(void *ctx, const char *method, const void *data, size_t len,
+                                    rsmqtt_auth_reply *reply);
+int             rsmqtt_options_set_auth_callback(rsmqtt_options *opts, rsmqtt_auth_callback cb, void *ctx);
+int             rsmqtt_auth_reply_set(rsmqtt_auth_reply *reply, const void *data, size_t len);
 
 /* ------------------------------------------------------------ properties */
 

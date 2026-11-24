@@ -113,6 +113,12 @@ rsmqtt_wincc_items *rsmqtt_wincc_dyn_items(const char *payload, size_t len);
 size_t rsmqtt_wincc_items_count(const rsmqtt_wincc_items *items);
 int    rsmqtt_wincc_items_get(const rsmqtt_wincc_items *items, size_t i, const char **text, size_t *len);
 void   rsmqtt_wincc_items_free(rsmqtt_wincc_items *items);
+/* dyn_blob: items are base64 strings in JSON (src/json.rs, dyn_blob_items); the payload of a list
+   (rsmqtt_wincc_blob_list_new / _add, freed with rsmqtt_wincc_items_free) is a JSON array of them */
+rsmqtt_wincc_items *rsmqtt_wincc_dyn_blob_items(const char *payload, size_t len);
+rsmqtt_wincc_items *rsmqtt_wincc_blob_list_new(void);
+void   rsmqtt_wincc_blob_list_add(rsmqtt_wincc_items *list, const char *data, size_t len);
+int    rsmqtt_wincc_dyn_blob_payload(const rsmqtt_wincc_items *list, rsmqtt_wincc_buf *out);
 
 /* ------------------------------------------------------------ redundancy */
 
@@ -319,6 +325,16 @@ typedef struct rsmqtt_wincc_number
 /* A value of data type `type` (1002 int32 .. 1007 bool, _address.._datatype)
  * from payload text; json_string: the text came from a JSON string. */
 int rsmqtt_wincc_parse_number(int type, const char *text, size_t len, int json_string, rsmqtt_wincc_number *out);
+
+/* ---------------------------------------------------------------- service */
+
+/* Lines of the MSA service's state file (src/service.rs), without line end. */
+int rsmqtt_wincc_service_header(rsmqtt_wincc_buf *line);
+int rsmqtt_wincc_service_record(const char *id, int qos, int binary, const char *broker, const char *filter,
+                                rsmqtt_wincc_buf *line);
+/* 1 header, 2 subscription (*id, *qos, *binary, *broker, *filter), 0 not valid */
+int rsmqtt_wincc_service_parse(const char *line, size_t len, rsmqtt_wincc_buf *id, int *qos, int *binary,
+                               rsmqtt_wincc_buf *broker, rsmqtt_wincc_buf *filter);
 
 #ifdef __cplusplus
 }

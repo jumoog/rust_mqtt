@@ -45,12 +45,7 @@ PVSSboolean RsMqttHWMapper::addDpPa(DpIdentifier &dpId, PeriphAddr *confPtr)
               CharString((int) confPtr->getTransformationType()) + " (use 1000..1008)");
     return TreeHWMapper::addDpPa(dpId, confPtr, HWMapDpPa::TransformationError);
   }
-  bool dyn = isDynElement(dpId);
-  if ( dyn && !RsMqttTrans::isSupportedDyn(confPtr->getTransformationType()) )
-  {
-    addrError(CharString("address '") + name.c_str() + "': a dyn element needs data type 1001..1007 (no blob)");
-    return TreeHWMapper::addDpPa(dpId, confPtr, HWMapDpPa::TransformationError);
-  }
+  bool dyn = isDynElement(dpId);  // every data type works for dyn elements too
   confPtr->setTransform(new RsMqttTrans(confPtr->getTransformationType(), dyn));
 
   RsMqttAddress addr;

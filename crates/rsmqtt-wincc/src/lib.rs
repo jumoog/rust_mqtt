@@ -2,7 +2,8 @@
 //! the address syntax ([`address`]), JSON paths ([`json`]), the Sparkplug B
 //! host application ([`sparkplug`]), the redundancy names ([`redu`]) and the
 //! settings of a broker connection ([`settings`]) and its addresses and
-//! message routing ([`router`]), and payload text to numbers ([`values`]).
+//! message routing ([`router`]), payload text to numbers ([`values`]) and
+//! the state file of the MSA service ([`service`]).
 //! The driver (C++, ComDrv) calls them through the C ABI in [`ffi`]
 //! (`include/rsmqtt_wincc.h`, C++ wrapper `include/rsmqtt_wincc.hpp`).
 //!
@@ -23,4 +24,5 @@ pub mod sparkplug;
 pub mod settings;
 pub mod router;
 pub mod values;
+pub mod service;
 pub mod ffi;

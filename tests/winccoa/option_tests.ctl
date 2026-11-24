@@ -698,6 +698,75 @@ void ensureDynDp()
     dpCreate("RsMqttDyn1", "RsMqttDynT");
 }
 
+void ensureDynBlobDp()
+{
+  if ( dynlen(dpTypes("RsMqttDynBlobT")) == 0 )
+  {
+    dyn_string el = makeDynString("bA", "bS", "bRaw", "bBad", "bOut");
+    dyn_dyn_string n; dyn_dyn_int t;
+    n[1] = makeDynString("RsMqttDynBlobT", ""); t[1] = makeDynInt(DPEL_STRUCT);
+    for (int i = 1; i <= dynlen(el); i++) { n[i + 1] = makeDynString("", el[i]); t[i + 1] = makeDynInt(0, DPEL_DYN_BLOB); }
+    dpTypeCreate(n, t);
+  }
+  if ( !dpExists("RsMqttDynBlob1") )
+    dpCreate("RsMqttDynBlob1", "RsMqttDynBlobT");
+}
+
+/** The items of a dyn_blob as hex text, "{666F6F ; 00FFFE}". */
+string blobItems(dyn_blob v)
+{
+  string s;
+  for (int i = 1; i <= dynlen(v); i++)
+  {
+    string h = v[i];  // a blob as string: its bytes in hex
+    s += (i > 1 ? " ; " : "") + strtoupper(h);
+  }
+  return "{" + s + "}";
+}
+
+/** dyn_blob: base64 strings in JSON, a raw payload as one item. */
+void dynBlob(string base)
+{
+  ensureDynBlobDp();
+  string d = "RsMqttDynBlob1.";
+  dyn_blob none;
+  blob five; blobAppendValue(five, "five", 4);
+  dpSetWait(d + "bA", none, d + "bS", none, d + "bRaw", none, d + "bBad", makeDynAnytype(five));
+  setAddr(d + "bA",   "o_dyn:" + base + "/ba", 1, 1008);
+  setAddr(d + "bS",   "o_dyn:" + base + "/bj;json=data.b", 1, 1008);
+  setAddr(d + "bRaw", "o_dyn:" + base + "/braw", 1, 1008);
+  setAddr(d + "bBad", "o_dyn:" + base + "/bbad", 1, 1008);
+  delay(1);
+  mosqPub("-t " + base + "/ba -m " + winArg("[\"Zm9v\", \"\", \"AP/+\"]"));
+  mosqPub("-t " + base + "/bj -m " + winArg("{\"data\": {\"b\": \"Zm9v\"}}"));
+  mosqPub("-t " + base + "/braw -m rawbytes");
+  mosqPub("-t " + base + "/bbad -m " + winArg("[\"Zm9v\", 1]"));
+  delay(1);
+  dyn_blob bA, bS, bRaw, bBad;
+  dpGet(d + "bA", bA, d + "bS", bS, d + "bRaw", bRaw, d + "bBad", bBad);
+  result("dyn_blob from a JSON array of base64 strings", blobItems(bA) == "{666F6F ;  ; 00FFFE}", blobItems(bA));
+  result("dyn_blob, json=data.b: a base64 string is one item", blobItems(bS) == "{666F6F}", blobItems(bS));
+  result("dyn_blob, raw payload -> one item as it is", blobItems(bRaw) == "{7261776279746573}", blobItems(bRaw));
+  result("dyn_blob, bad item: no update", blobItems(bBad) == "{66697665}", blobItems(bBad));
+
+  setAddr(d + "bOut", "o_dyn:" + base + "/bout", 2, 1008);
+  delay(1);
+  subOne(base + "/bout", "dbout.txt");
+  delay(1);
+  blob foo, bin, empty;
+  blobAppendValue(foo, "foo", 3);
+  blobAppendValue(bin, 255, 1);
+  dyn_blob out = makeDynAnytype(foo, empty, bin);
+  dpSetWait(d + "bOut", out);
+  delay(1);
+  string bo = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/dbout.txt");
+  result("output dyn_blob -> JSON array of base64 strings", bo == "[\"Zm9v\",\"\",\"/w==\"]", bo);
+
+  if ( gKeep ) return;
+  dyn_string all = makeDynString("bA", "bS", "bRaw", "bBad", "bOut");
+  for (int i = 1; i <= dynlen(all); i++) dpSetWait(d + all[i] + ":_address.._type", 0, d + all[i] + ":_distrib.._type", 0);
+}
+
 /** dyn DPEs: JSON arrays or single values in, JSON arrays out. */
 void dynTypes()
 {
@@ -768,6 +837,8 @@ void dynTypes()
   result("output dyn_string -> JSON array of strings", os == "[\"a\",\"b\\\"c\"]", os);
   result("output dyn_int with json=data.v", oj == "{\"data\":{\"v\":[1,2,3]}}", oj);
   result("output empty dyn -> []", oe == "[]", oe);
+
+  dynBlob(base);
 
   dyn_string all = makeDynString("dF", "dI", "dL", "dS", "dB", "dOne", "dOneS", "dJ", "dJs", "dEmpty", "dBad",
                                  "outF", "outS", "outJ", "outE");

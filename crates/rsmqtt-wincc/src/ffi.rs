@@ -16,7 +16,7 @@ use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
-use crate::{address, json, redu, router, settings, sparkplug, values};
+use crate::{address, json, redu, router, service, settings, sparkplug, values};
 
 thread_local! {
     static LAST_ERROR: RefCell<CString> = RefCell::new(CString::default());
@@ -332,6 +332,37 @@ pub struct RsmqttWinccItems {
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_dyn_items(payload: *const c_char, len: usize) -> *mut RsmqttWinccItems {
     guard(ptr::null_mut(), || Ok(Box::into_raw(Box::new(RsmqttWinccItems { items: json::dyn_items(bytes(payload, len))? }))))
+}
+
+/// The items of a payload for a dyn_blob DPE (see json::dyn_blob_items); NULL on error.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_dyn_blob_items(payload: *const c_char, len: usize) -> *mut RsmqttWinccItems {
+    guard(ptr::null_mut(), || {
+        let items = json::dyn_blob_items(bytes(payload, len))?.into_iter().map(|b| (b, false)).collect();
+        Ok(Box::into_raw(Box::new(RsmqttWinccItems { items })))
+    })
+}
+
+/// Collects the items of a dyn_blob DPE for rsmqtt_wincc_dyn_blob_payload.
+#[no_mangle]
+pub extern "C" fn rsmqtt_wincc_blob_list_new() -> *mut RsmqttWinccItems {
+    Box::into_raw(Box::new(RsmqttWinccItems { items: Vec::new() }))
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_blob_list_add(l: *mut RsmqttWinccItems, data: *const c_char, len: usize) {
+    if let Some(l) = l.as_mut() {
+        l.items.push((bytes(data, len).to_vec(), false));
+    }
+}
+
+/// The payload of a dyn_blob DPE (a JSON array of base64 strings).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_dyn_blob_payload(l: *const RsmqttWinccItems, out: *mut RsmqttWinccBuf) -> c_int {
+    guard(-1, || {
+        let l = l.as_ref().ok_or("null list")?;
+        Ok(put(out, json::dyn_blob_payload(l.items.iter().map(|(b, _)| b.as_slice()))))
+    })
 }
 
 #[no_mangle]
@@ -1288,5 +1319,67 @@ pub unsafe extern "C" fn rsmqtt_wincc_parse_number(
             values::Number::Bool(v) => out.b = v as c_int,
         }
         Ok(0)
+    })
+}
+
+//------------------------------------------------------------------------ service
+
+/// The header line of the MSA service's state file (without line end).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_service_header(out: *mut RsmqttWinccBuf) -> c_int {
+    guard(-1, || Ok(put(out, service::header().as_bytes().to_vec())))
+}
+
+/// A subscription line of the MSA service's state file (without line end).
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_service_record(
+    id: *const c_char,
+    qos: c_int,
+    binary: c_int,
+    broker: *const c_char,
+    filter: *const c_char,
+    out: *mut RsmqttWinccBuf,
+) -> c_int {
+    guard(-1, || {
+        let r = service::Record {
+            id: text(id).into_owned(),
+            qos,
+            binary: binary != 0,
+            broker: text(broker).into_owned(),
+            filter: text(filter).into_owned(),
+        };
+        Ok(put(out, service::record(&r).into_bytes()))
+    })
+}
+
+/// Reads a line of the state file: 1 header, 2 subscription (`*id`, `*qos`,
+/// `*binary`, `*broker`, `*filter`), 0 not valid.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_service_parse(
+    line: *const c_char,
+    len: usize,
+    id: *mut RsmqttWinccBuf,
+    qos: *mut c_int,
+    binary: *mut c_int,
+    broker: *mut RsmqttWinccBuf,
+    filter: *mut RsmqttWinccBuf,
+) -> c_int {
+    guard(0, || {
+        let Ok(line) = std::str::from_utf8(bytes(line, len)) else { return Ok(0) };
+        Ok(match service::parse(line) {
+            Some(service::Line::Header) => 1,
+            Some(service::Line::Record(r)) => {
+                if qos.is_null() || binary.is_null() {
+                    return Err("null output".into());
+                }
+                *qos = r.qos;
+                *binary = r.binary as c_int;
+                if put(id, r.id.into_bytes()) < 0 || put(broker, r.broker.into_bytes()) < 0 || put(filter, r.filter.into_bytes()) < 0 {
+                    return Err("null output buffer".into());
+                }
+                2
+            }
+            None => 0,
+        })
     })
 }
