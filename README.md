@@ -302,7 +302,7 @@ Notes:
 - Redundancy: both drivers register the service; which host's driver answers is up to MSA. If NotFound answers repeat (e.g. calls reaching different drivers), the library waits 2 s between attempts. Not tested in a redundant system.
 - Functions defined in an `evalScript()` script (such as the WinCC OA MCP `ctrl-eval`) cannot be callbacks; put them in a library.
 
-[tests/winccoa/service_demo.ctl](tests/winccoa/service_demo.ctl) is a small example to run as a CTRL manager (`WCCOActrl -num 97 service_demo.ctl`, copied to the project's `scripts`): it subscribes to `plant:demo/#`, logs every message, answers it on `demo_ack/<rest>` and publishes a counter on `demo/tick` every 5 s.
+[tests/winccoa/service_demo.ctl](tests/winccoa/service_demo.ctl) is a small example to run as a CTRL manager (`WCCOActrl -num 97 service_demo.ctl`, copied to the project's `scripts`): it subscribes to `plant:demo/#`, logs every message, answers it on `demo_ack/<rest>` and publishes a counter on `demo/tick` every 5 s. A second subscription on `demo_q2/#` with QoS 2 checks every 5 s that its own numbered QoS 2 messages arrive once, in order and with `qos` 2 (`service_demo: QoS 2 PASS` in the manager's log).
 
 ## Tests
 
