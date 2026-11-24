@@ -1015,8 +1015,8 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_remove(
 }
 
 /// Registers a subscription of the MSA service: 1 and `*filter` to
-/// subscribe, 0 nothing to do, -1 and rsmqtt_wincc_last_error() for an
-/// invalid filter.
+/// subscribe (always, so that the broker sends the retained messages), -1
+/// and rsmqtt_wincc_last_error() for an invalid filter.
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_add_service(
     r: *mut RsmqttWinccRouter,
@@ -1027,13 +1027,8 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_add_service(
 ) -> c_int {
     guard(-1, || {
         let r = r.as_mut().ok_or("null router")?;
-        Ok(match r.r.add_service(id, &text(filter), qos)? {
-            Some(f) => {
-                put(out, f.into_bytes());
-                1
-            }
-            None => 0,
-        })
+        put(out, r.r.add_service(id, &text(filter), qos)?.into_bytes());
+        Ok(1)
     })
 }
 
@@ -1119,9 +1114,10 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_message(
     now_ms: i64,
     state_host: *const c_char,
     state_ts: i64,
+    retained: c_int,
 ) {
     let (t, h) = (text(topic), text(state_host));
-    router_call(r, |r, out| r.message_into(&t, bytes(payload, len), now_ms, &h, state_ts, out))
+    router_call(r, |r, out| r.message_into(&t, bytes(payload, len), retained != 0, now_ms, &h, state_ts, out))
 }
 
 /// The values of the $state addresses.

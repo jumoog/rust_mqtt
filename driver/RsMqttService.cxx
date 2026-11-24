@@ -208,10 +208,9 @@ vrpc::Status RsMqttService::subscribe(std::shared_ptr<vrpc::ServerContext>, cons
 
   uint64_t id = ++nextId;
   std::string filter, err;
-  if ( conn->router.addService(id, topic, qos, filter, err) )
-    conn->subscribe({filter});
-  else if ( !err.empty() )
+  if ( !conn->router.addService(id, topic, qos, filter, err) )
     return invalid("'" + topic + "': " + err);
+  conn->subscribe({filter});  // also for a filter in use: the broker sends the retained messages
 
   Subscription &sub = subs[id];
   sub.conn = conn;

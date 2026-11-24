@@ -527,7 +527,8 @@ void RsMqttHWService::apply(RsMqttConnection &conn, const rsmqtt::wincc::Router:
 void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload,
                                      int qos, bool retained)
 {
-  const auto &out = conn.router.message(topic, payload, rsmqttNowMs(), conn.spbStateHost(), conn.settings.stateTs());
+  const auto &out = conn.router.message(topic, payload, rsmqttNowMs(), conn.spbStateHost(), conn.settings.stateTs(),
+                                        retained);
   apply(conn, out, payload);
   // the MSA service subscriptions the router found for it
   if ( out.serviceCount )

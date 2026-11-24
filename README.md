@@ -181,7 +181,7 @@ rsmqttSetAddress("Pump1.hum",      "plant:line1/pump1;json=data.hum;ts=data.time
 
 `<broker>:$spb/<group>/<edge node>[/<device>];metric=<name>|;online` (Sparkplug B, see below)
 
-- Input addresses subscribe. Filters with `+` / `#` and `$share/<group>/…` work too, and every matching message updates the DPE.
+- Input addresses subscribe. Filters with `+` / `#` and `$share/<group>/…` work too, and every matching message updates the DPE. A filter must be valid MQTT, or the address is refused: `#` only as the last level, `+` only as a whole level, `$share/<group>/<filter>` with a group without wildcards and a filter after it.
 - Output addresses publish when the DPE changes.
 - `$state` is the connection state: 1 while connected, otherwise 0.
 - After every (re)connect the driver subscribes again, so the broker resends retained values. That works like a general query.
@@ -288,7 +288,7 @@ main()
 
 - `rsmqttTopicConnect(callback, broker, topic, options)` returns a handle (> 0) or -1 (the reason is logged). `callback` is a function name or `function_ptr` with `(string topic, anytype payload, mapping info)`; `info` has `broker`, `driver`, `qos`, `retained`, `binary`, `time` (receive time), `handle` and `dropped`. `topic` may be a filter with `+`, `#` or `$share/<group>/`; an invalid filter (e.g. `a/#/b`) is refused. Options: `qos` (default `Config.SubscribeQoS`), `binary` (every payload as `blob`), `driver` (driver number; by default the driver whose `Brokers` list has the broker; needed for brokers from the config file).
 - The payload is a string, or a blob if `binary` is set or the payload is no valid UTF-8 text or contains NUL bytes (`info["binary"]` is then TRUE). Declare it `string` only for topics that carry text.
-- The callback runs in a thread of the script that called `rsmqttTopicConnect()`, one message after the other in the order they arrived. An error in the callback is logged and the next message is delivered. Retained messages arrive when the subscription starts, with `info["retained"] == TRUE`.
+- The callback runs in a thread of the script that called `rsmqttTopicConnect()`, one message after the other in the order they arrived. An error in the callback is logged and the next message is delivered. Retained messages arrive when the subscription starts, with `info["retained"] == TRUE`: every new subscription sends SUBSCRIBE, also for a filter the driver already uses, so addresses and other callbacks on that filter get its retained messages again.
 - `rsmqttTopicDisconnect(handle)` ends a subscription, `rsmqttTopicHandles()` lists those of the manager.
 - `rsmqttPublish(broker, topic, payload, qos = -1, retain = -1, driverNum = 0)` publishes a string or blob (-1: the broker's `PublishQoS` / `PublishRetain`); 0 means the MQTT client took the message, -1 an error (logged). Like the driver's outputs, payloads above `maxPayload` are refused, and so is publishing on the passive host of a redundant pair (unless `passiveDriverWrites` is set). The broker's driver number is cached for 30 s; in a callback, `info["driver"]` can be passed.
 - If the driver is not running, `rsmqttTopicConnect()` and `rsmqttPublish()` fail with status 14 ("Service is not available"). If the driver restarts, every subscription is made again within a few seconds; messages that arrive in between are lost.
@@ -297,7 +297,7 @@ How it works: vRPC in 3.21 has request/response functions only (`Subscribe`, `Re
 
 Notes:
 
-- Overlapping filters on one broker (e.g. `a/#` and `a/b`, also an address and a callback) make brokers like mosquitto send a message once per filter, back to back. Callbacks get it once: the driver skips consecutive identical messages up to the number of the broker's filters that match the topic. `$share/` filters are not counted (the broker may or may not send them a copy), so a callback overlapping a shared subscription can see a message twice. Addresses still get every copy.
+- Overlapping filters on one broker (e.g. `a/#` and `a/b`, also an address and a callback) make brokers like mosquitto send a message once per filter, back to back. Callbacks get it once: the driver skips identical messages (topic, payload, retained flag) that follow within 100 ms, up to the number of the broker's filters that match the topic; the same value published again later is a new message, also with brokers that send only one copy. `$share/` filters are not counted (the broker may or may not send them a copy), so a callback overlapping a shared subscription can see a message twice. Addresses still get every copy.
 - Any CTRL manager of the system can publish to every broker of the driver this way. `serviceApi = 0` in the `[rsmqtt]` section turns the service off.
 - Redundancy: both drivers register the service; which host's driver answers is up to MSA. If NotFound answers repeat (e.g. calls reaching different drivers), the library waits 2 s between attempts. Not tested in a redundant system.
 - Functions defined in an `evalScript()` script (such as the WinCC OA MCP `ctrl-eval`) cannot be callbacks; put them in a library.

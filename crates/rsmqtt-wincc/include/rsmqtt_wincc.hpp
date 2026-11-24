@@ -664,16 +664,17 @@ namespace rsmqtt::wincc
         return (Added) rc;
       }
 
-      /// Registers a subscription of the MSA service; true: subscribe `filter`.
-      /// False with `err` for an invalid filter, else false: nothing to do.
+      /// Registers a subscription of the MSA service: true and the filter to
+      /// subscribe (always: the broker then sends the retained messages);
+      /// false and `err` for an invalid filter.
       bool addService(uint64_t id, const std::string &filter, int qos, std::string &subscribe, std::string &err)
       {
         rsmqtt_wincc_buf b{};
-        int rc = rsmqtt_wincc_router_add_service(r, id, filter.c_str(), qos, &b);
-        if ( rc < 0 )
+        if ( rsmqtt_wincc_router_add_service(r, id, filter.c_str(), qos, &b) != 1 )
+        {
           err = lastError();
-        if ( rc != 1 )
           return false;
+        }
         subscribe = take(b);
         return true;
       }
@@ -724,9 +725,10 @@ namespace rsmqtt::wincc
 
       /// One message; stateHost / stateTs: the Sparkplug STATE this client publishes ("" for none).
       const Outcome &message(const std::string &topic, std::string_view payload, int64_t nowMs,
-                             const std::string &stateHost, int64_t stateTs)
+                             const std::string &stateHost, int64_t stateTs, bool retained = false)
       {
-        rsmqtt_wincc_router_message(r, topic.c_str(), payload.data(), payload.size(), nowMs, stateHost.c_str(), stateTs);
+        rsmqtt_wincc_router_message(r, topic.c_str(), payload.data(), payload.size(), nowMs, stateHost.c_str(), stateTs,
+                                    retained);
         return collect();
       }
 
