@@ -12,7 +12,7 @@
 //   string src; fileToString("<repo>/tests/winccoa/option_tests.ctl", src);
 //   anytype res; evalScript(res, src, makeDynString(), "transport");
 //
-// Groups: transport, auth, tls, ws, connect, v5, session, buffer, json, dyn,
+// Groups: transport, auth, tls, ws, connect, v5, session, buffer, json, payload, dyn,
 //         redu, spb, will_arm / will_check, persist_arm / persist_check,
 //         host2_prepare / host2 / host2_check (see host2_prepare)
 
@@ -21,6 +21,7 @@ const string DRV_DP   = "_RsMqttDriver_3";
 const string CERTS    = "C:/Repos/rust_mqtt/tests/broker/certs/";
 const string TEST_DP  = "RsMqttOpt1";
 const string BROKER_CONTAINER = "rsmqtt-mosq-full";
+const int    MAX_PAYLOAD = 65536;  // [rsmqtt] maxPayload of the test project (default)
 const string FREEZE   = "C:/Repos/rust_mqtt/target/netutil.freeze"; // netutil forwarder drops all bytes while it exists
 
 dyn_string gResults;
@@ -664,6 +665,91 @@ void json()
   cleanup();
 }
 
+void ensurePayloadDp()
+{
+  if ( dynlen(dpTypes("RsMqttPayloadT")) == 0 )
+  {
+    dyn_dyn_string n = makeDynAnytype(makeDynString("RsMqttPayloadT", ""), makeDynString("", "s"), makeDynString("", "b"));
+    dyn_dyn_int t = makeDynAnytype(makeDynInt(DPEL_STRUCT), makeDynInt(0, DPEL_STRING), makeDynInt(0, DPEL_BLOB));
+    dpTypeCreate(n, t);
+  }
+  if ( !dpExists("RsMqttPayload1") )
+    dpCreate("RsMqttPayload1", "RsMqttPayloadT");
+}
+
+/** Like subOne, with mosquitto_sub's output format (%p payload, %x payload in hex). */
+void subFmt(string topic, string fileName, string fmt, int waitSec = 10)
+{
+  sh("docker exec -d " + BROKER_CONTAINER + " sh -c \"mosquitto_sub -p 1883 -t " + topic + " -C 1 -W " + waitSec +
+     " -F '" + fmt + "' > /tmp/" + fileName + "\"");
+}
+
+/** n characters of a repeating pattern. */
+string pattern(int n)
+{
+  string s = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-_";
+  while ( strlen(s) < n ) s += s;
+  return substr(s, 0, n);
+}
+
+/** Plain string and blob outputs of many sizes up to maxPayload (the length prefix
+    of RsMqttTrans::toPeriph has bytes >= 0x80 for most sizes). */
+void payload()
+{
+  ensurePayloadDp();
+  string d = "RsMqttPayload1.";
+  string base = "opt/" + rnd(3) + "/pay";
+  broker("o_pay", makeMapping("ServerURI", "tcp://localhost:18840"));
+  waitState("o_pay", 3, 8);
+  setAddr(d + "s", "o_pay:" + base + "/s", 2, 1001);
+  setAddr(d + "b", "o_pay:" + base + "/b", 2, 1008);
+  delay(1);
+
+  dyn_int sizes = makeDynInt(1, 200, 1000, 4000, 8000, 16000, 25000, 60000, MAX_PAYLOAD);
+  for (int i = 1; i <= dynlen(sizes); i++)
+  {
+    string want = pattern(sizes[i]);
+    subFmt(base + "/s", "pay_s.txt", "%p");
+    delay(0, 500);
+    dpSetWait(d + "s", want);
+    delay(1);
+    string got = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/pay_s.txt");
+    result("string output of " + sizes[i] + " characters", got == want, "got " + strlen(got) + " characters");
+  }
+
+  dyn_int bsizes = makeDynInt(1, 1000, 25000, MAX_PAYLOAD);
+  for (int i = 1; i <= dynlen(bsizes); i++)
+  {
+    blob b;
+    for (int k = 0; k < bsizes[i]; k++) blobAppendValue(b, 255 - k % 256, 1);  // first byte 0xff
+    string want = b;  // hex
+    subFmt(base + "/b", "pay_b.txt", "%x");
+    delay(0, 500);
+    dpSetWait(d + "b", b);
+    delay(1);
+    string got = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/pay_b.txt");
+    result("blob output of " + bsizes[i] + " bytes", strtoupper(got) == strtoupper(want), "got " + (strlen(got) / 2) + " bytes");
+  }
+
+  // above maxPayload: refused by toPeriph, nothing published, the next value goes out
+  subFmt(base + "/s", "pay_big.txt", "%p", 3);
+  delay(0, 500);
+  dpSetWait(d + "s", pattern(MAX_PAYLOAD + 1));
+  delay(4);
+  string big = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/pay_big.txt");
+  result("string output above maxPayload is refused", big == "", "got " + strlen(big) + " characters");
+  subFmt(base + "/s", "pay_s.txt", "%p");
+  delay(0, 500);
+  dpSetWait(d + "s", "after");
+  delay(1);
+  string after = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/pay_s.txt");
+  result("  ... the next value is published", after == "after", after);
+
+  dyn_string outs = makeDynString("s", "b");
+  for (int i = 1; i <= dynlen(outs); i++) dpSetWait(d + outs[i] + ":_address.._type", 0, d + outs[i] + ":_distrib.._type", 0);
+  cleanup();
+}
+
 /** TRUE if two dyn values have the same items. */
 bool sameItems(anytype a, anytype b)
 {
@@ -1151,6 +1237,7 @@ dyn_string main(string group)
     case "v5":            v5(); break;
     case "session":       session(); break;
     case "json":          json(); break;
+    case "payload":       payload(); break;
     case "dyn":           dynTypes(); break;
     case "redu":          redu(); break;
     case "spb":           sparkplug(); break;

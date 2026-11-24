@@ -208,6 +208,20 @@ PVSSboolean RsMqttTrans::toPeriph(PVSSchar *dataPtr, PVSSulong len, const Variab
   return PVSS_TRUE;
 }
 
+bool RsMqttTrans::periphPayload(const PVSSchar *data, PVSSulong dlen, std::string_view &payload)
+{
+  if ( !data || dlen < 4 )
+    return false;
+  // PVSSchar is signed: read the prefix bytes unsigned, or a byte >= 0x80
+  // (e.g. 1000 = e8 03 00 00) sign-extends into the higher bytes
+  const unsigned char *u = reinterpret_cast<const unsigned char *>(data);
+  uint32_t n = (uint32_t) u[0] | ((uint32_t) u[1] << 8) | ((uint32_t) u[2] << 16) | ((uint32_t) u[3] << 24);
+  if ( n > dlen - 4 )
+    return false;
+  payload = std::string_view(reinterpret_cast<const char *>(data + 4), n);
+  return true;
+}
+
 //----------------------------------------------------------------------------
 
 Variable *RsMqttTrans::textToItem(std::string_view text, bool jsonString, std::string &why) const

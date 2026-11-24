@@ -5,6 +5,7 @@
 #include "RsMqttResources.hxx"
 #include "RsMqttService.hxx"
 #include "RsMqttTime.hxx"
+#include "RsMqttTrans.hxx"
 #include "RsMqttSparkplug.hxx"
 
 #include <DrvManager.hxx>
@@ -621,13 +622,12 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
     log(ErrClass::PRIO_WARNING, "writeData", "no data for address '" + name + "'");
     return PVSS_FALSE;
   }
-  uint32_t n = (uint32_t) data[0] | ((uint32_t) data[1] << 8) | ((uint32_t) data[2] << 16) | ((uint32_t) data[3] << 24);
-  if ( n > dlen - 4 )
+  std::string_view value;
+  if ( !RsMqttTrans::periphPayload(data, dlen, value) )
   {
     log(ErrClass::PRIO_WARNING, "writeData", "corrupt data for address '" + name + "'");
     return PVSS_FALSE;
   }
-  std::string_view value(reinterpret_cast<const char *>(data + 4), n);
 
   // topic, payload (json= / ts=, Sparkplug NCMD / DCMD), QoS and retain:
   // crates/rsmqtt-wincc/src/router.rs (Router::write)

@@ -38,6 +38,10 @@ class RsMqttTrans : public Transformation
     VariablePtr toVar(const PVSSchar *data, const PVSSushort dlen, const PVSSushort subix) const override;
     VariablePtr toVar(const PVSSchar *data, const PVSSulong dlen, const PVSSulong subix) const override;
 
+    /// The payload toPeriph wrote into a buffer of dlen bytes; false if the
+    /// length prefix does not fit the buffer.
+    static bool periphPayload(const PVSSchar *data, PVSSulong dlen, std::string_view &payload);
+
   private:
     VariableType itemType() const;
     /// One value as payload text; json: as JSON (strings quoted).
