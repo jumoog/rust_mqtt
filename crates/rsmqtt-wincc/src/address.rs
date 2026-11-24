@@ -35,6 +35,8 @@ pub struct Address {
     /// ts=path (needs json)
     pub has_ts: bool,
     pub ts_path: String,
+    /// merge: writes of all merge addresses on the topic go out as one JSON document
+    pub merge: bool,
     pub sparkplug: bool,
     pub spb_group: String,
     pub spb_node: String,
@@ -218,6 +220,11 @@ pub fn parse(text: &str) -> Result<Address, String> {
             }
             out.has_ts = true;
             out.ts_path = val.to_string();
+        } else if is("merge") {
+            if !val.is_empty() {
+                return Err("merge takes no value".into());
+            }
+            out.merge = true;
         } else {
             return Err(format!("unknown address option '{}'", name));
         }
@@ -236,6 +243,14 @@ pub fn parse(text: &str) -> Result<Address, String> {
     }
     if out.json && out.is_state {
         return Err("$state has no JSON payload".into());
+    }
+    if out.merge {
+        if out.sparkplug || out.is_state || is_wildcard_filter(&out.topic) {
+            return Err("merge needs a topic without wildcards (no $state, $spb or $share)".into());
+        }
+        if !out.json || json::parse_path(&out.json_path)?.is_empty() {
+            return Err("merge needs the json option with a path, e.g. json=temp;merge".into());
+        }
     }
     if out.has_ts {
         // the published object must hold both: neither path may contain the other
@@ -286,6 +301,13 @@ mod tests {
         let a = ok("plant:s/1;json=data.temp;ts=data.time");
         assert!(a.json && a.has_ts && a.json_path == "data.temp" && a.ts_path == "data.time");
         assert!(ok("plant:s/1;json").json_path.is_empty());
+        let a = ok("plant:s/1;json=temp;merge");
+        assert!(a.merge && a.json_path == "temp");
+        assert!(!ok("plant:s/1;json=temp").merge);
+        for bad in ["plant:s/1;merge", "plant:s/1;json;merge", "plant:s/+;json=a;merge", "plant:$share/g/s;json=a;merge", "plant:s;json=a;merge=1",
+                    "plant:$spb/G/N;metric=m;merge"] {
+            assert!(parse(bad).is_err(), "{bad}");
+        }
         for bad in ["plant:s/1;ts=time", "plant:s/1;json=a;ts=a.b", "plant:s/1;json;ts=t", "plant:$state;json", "plant:s;json=a..b"] {
             assert!(parse(bad).is_err(), "{bad}");
         }

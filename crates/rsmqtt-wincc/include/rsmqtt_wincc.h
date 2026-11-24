@@ -305,11 +305,15 @@ size_t rsmqtt_wincc_router_warning_count(const rsmqtt_wincc_router *r);
 const char *rsmqtt_wincc_router_warning_get(const rsmqtt_wincc_router *r, size_t i, int *sparkplug);
 /* The message that writes `value` (payload text of data type value_type, 1001..1008) to an
  * output address; time_ms: the value's time (ts=); publish_qos / publish_retain: the defaults.
+ * 0: publish it; 1: a merge address, the value waits for rsmqtt_wincc_router_flush;
  * -1 and rsmqtt_wincc_last_error() if it cannot be written. */
-int    rsmqtt_wincc_router_write(const rsmqtt_wincc_router *r, const char *full_address, const char *value,
+int    rsmqtt_wincc_router_write(rsmqtt_wincc_router *r, const char *full_address, const char *value,
                                  size_t len, int value_type, int64_t time_ms, int64_t now_ms, int publish_qos,
                                  int publish_retain, rsmqtt_wincc_buf *topic, rsmqtt_wincc_buf *payload, int *qos,
                                  int *retain);
+/* the documents of the merge groups written since the last call, as publishes (errors as
+ * warnings); call it after a batch of writes */
+void   rsmqtt_wincc_router_flush(rsmqtt_wincc_router *r, int publish_qos, int publish_retain);
 
 /* ---------------------------------------------------------------- values */
 

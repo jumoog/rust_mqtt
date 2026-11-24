@@ -10,6 +10,10 @@
 //! driver turns the values into HWObjects; the router never calls the
 //! driver.
 //!
+//! Output addresses with `merge` on one topic form a group: [`Router::write`]
+//! keeps the value of a member and [`Router::flush_into`] publishes one JSON
+//! document per changed group with the last value of every member.
+//!
 //! Subscriptions of the driver's MSA service (RsMqttService, by id) share
 //! the filters with the addresses ([`Router::add_service`] /
 //! [`Router::remove_service`]); a message lists the ids whose filter
@@ -189,6 +193,25 @@ struct Subscription {
     plan_dirty: bool,
 }
 
+/// A `merge` address in its group.
+struct Member {
+    address: String,
+    path: json::Path,
+    ts: Option<json::Path>,
+    /// the last value and ts value (JSON text); None: not written yet
+    value: Option<(Vec<u8>, Option<Vec<u8>>)>,
+}
+
+/// The `merge` addresses of one topic.
+struct MergeGroup {
+    /// in the order they were added (the order of the document)
+    members: Vec<Member>,
+    /// qos= / retain= of the members (-1: connection default)
+    qos: i32,
+    retain: i32,
+    dirty: bool,
+}
+
 /// group, edge node, device ("" for the node), metric (None: `;online`)
 type SpbKey = (String, String, String, Option<String>);
 
@@ -267,6 +290,10 @@ pub struct Router {
     /// service subscription id -> filter
     service: HashMap<u64, String>,
     copies: Copies,
+    /// topic -> its `merge` addresses
+    merge: BTreeMap<String, MergeGroup>,
+    /// a group has a value that is not published yet
+    merge_dirty: bool,
 }
 
 impl Router {
@@ -279,6 +306,9 @@ impl Router {
     /// subscribe QoS for addresses without qos=.
     pub fn add(&mut self, full: &str, dyn_: bool, input: bool, default_qos: i32) -> Result<Added, String> {
         let addr = address::parse(full)?;
+        if addr.merge && !self.addresses.contains_key(full) {
+            self.join_merge(full, &addr)?;
+        }
         let entry = self
             .addresses
             .entry(full.to_string())
@@ -327,6 +357,14 @@ impl Router {
         let addr = entry.addr.clone();
         if entry.refs <= 0 {
             self.addresses.remove(full);
+            if addr.merge {
+                if let Some(g) = self.merge.get_mut(&addr.topic) {
+                    g.members.retain(|m| m.address != full);
+                    if g.members.is_empty() {
+                        self.merge.remove(&addr.topic);
+                    }
+                }
+            }
         }
 
         if addr.is_state {
@@ -369,6 +407,85 @@ impl Router {
         }
         sub.plan_dirty = true;
         self.release(addr.topic)
+    }
+
+    /// Adds a new `merge` address to the group of its topic: its paths must
+    /// not collide with the other members', and qos= / retain= must match.
+    fn join_merge(&mut self, full: &str, addr: &Address) -> Result<(), String> {
+        let path = json::parse_path(&addr.json_path).map_err(|err| format!("address '{full}': {err}"))?;
+        let ts = if addr.has_ts {
+            Some(json::parse_path(&addr.ts_path).map_err(|err| format!("address '{full}': {err}"))?)
+        } else {
+            None
+        };
+        if let Some(g) = self.merge.get(&addr.topic) {
+            if g.qos != addr.qos || g.retain != addr.retain {
+                return Err(format!(
+                    "address '{full}': all merge addresses on topic '{}' need the same qos= and retain=",
+                    addr.topic
+                ));
+            }
+            let mut paths: Vec<&json::Path> =
+                g.members.iter().flat_map(|m| std::iter::once(&m.path).chain(m.ts.as_ref())).collect();
+            paths.push(&path);
+            paths.extend(ts.as_ref());
+            let probe: Vec<(&json::Path, &[u8])> = paths.into_iter().map(|p| (p, &b"0"[..])).collect();
+            if json::build(&probe).is_err() {
+                return Err(format!(
+                    "address '{full}': its JSON paths collide with another merge address on topic '{}'",
+                    addr.topic
+                ));
+            }
+        }
+        let g = self.merge.entry(addr.topic.clone()).or_insert_with(|| MergeGroup {
+            members: vec![],
+            qos: addr.qos,
+            retain: addr.retain,
+            dirty: false,
+        });
+        g.members.push(Member { address: full.to_string(), path, ts, value: None });
+        Ok(())
+    }
+
+    /// The documents of the `merge` groups written since the last call
+    /// (in [`Outcome::publish`], errors in [`Outcome::warnings`]); call it
+    /// after a batch of writes. `publish_qos` / `publish_retain`: the
+    /// connection's defaults.
+    pub fn flush_into(&mut self, publish_qos: i32, publish_retain: bool, out: &mut Outcome) {
+        out.clear();
+        if !std::mem::take(&mut self.merge_dirty) {
+            return;
+        }
+        for (topic, g) in self.merge.iter_mut().filter(|(_, g)| g.dirty) {
+            g.dirty = false;
+            let mut members: Vec<(&json::Path, &[u8])> = vec![];
+            for m in &g.members {
+                let Some((v, ts)) = &m.value else { continue };
+                members.push((&m.path, v));
+                if let (Some(p), Some(t)) = (&m.ts, ts) {
+                    members.push((p, t));
+                }
+            }
+            if members.is_empty() {
+                continue;
+            }
+            match json::build(&members) {
+                Ok(payload) => out.publish.push(Publish {
+                    topic: topic.clone(),
+                    payload,
+                    qos: if g.qos >= 0 { g.qos } else { publish_qos },
+                    retain: if g.retain >= 0 { g.retain != 0 } else { publish_retain },
+                }),
+                Err(err) => out.warnings.push(Warning { sparkplug: false, text: format!("merge topic '{topic}': {err}") }),
+            }
+        }
+    }
+
+    /// [`Router::flush_into`] with a new Outcome.
+    pub fn flush(&mut self, publish_qos: i32, publish_retain: bool) -> Outcome {
+        let mut out = Outcome::default();
+        self.flush_into(publish_qos, publish_retain, &mut out);
+        out
     }
 
     /// Drops a subscription nothing uses any more; returns its filter to unsubscribe.
@@ -580,9 +697,11 @@ impl Router {
     ///
     /// Sparkplug metrics are written as NCMD / DCMD with the data type of
     /// their birth (QoS 0, not retained).
+    ///
+    /// None: a `merge` address; the value waits for [`Router::flush_into`].
     #[allow(clippy::too_many_arguments)] // mirrors the C ABI call
     pub fn write(
-        &self,
+        &mut self,
         full: &str,
         value: &[u8],
         value_type: i32,
@@ -590,7 +709,7 @@ impl Router {
         now_ms: i64,
         publish_qos: i32,
         publish_retain: bool,
-    ) -> Result<Publish, String> {
+    ) -> Result<Option<Publish>, String> {
         let e = self.addresses.get(full).ok_or_else(|| format!("no active MQTT connection for address '{full}'"))?;
         let a = &e.addr;
         if a.sparkplug && a.spb_online {
@@ -605,13 +724,27 @@ impl Router {
                 .spb
                 .command(&a.spb_group, &a.spb_node, &a.spb_device, &a.spb_metric, value, now_ms)
                 .map_err(|err| format!("address '{full}': {err}"))?;
-            return Ok(Publish { topic: m.topic, payload: m.payload, qos: 0, retain: false });
+            return Ok(Some(Publish { topic: m.topic, payload: m.payload, qos: 0, retain: false }));
         }
 
         let payload = if a.json {
             use crate::values::types::{BOOL, FLOAT, INT32};
             let plain = e.dyn_ || (INT32..=FLOAT).contains(&value_type) || value_type == BOOL;
             let v = if plain { value.to_vec() } else { json::quote(value) };
+            if a.merge {
+                let g = self.merge.get_mut(&a.topic);
+                let (g, m) = g
+                    .and_then(|g| {
+                        let i = g.members.iter().position(|m| m.address == full)?;
+                        Some((&mut g.dirty, &mut g.members[i]))
+                    })
+                    .ok_or_else(|| format!("address '{full}': not in its merge group"))?;
+                let ts = m.ts.is_some().then(|| json::quote(json::iso_time(time_ms).as_bytes()));
+                m.value = Some((v, ts));
+                *g = true;
+                self.merge_dirty = true;
+                return Ok(None);
+            }
             let path = json::parse_path(&a.json_path).map_err(|err| format!("address '{full}': {err}"))?;
             let mut members = vec![(path, v)];
             if a.has_ts {
@@ -623,12 +756,12 @@ impl Router {
         } else {
             value.to_vec()
         };
-        Ok(Publish {
+        Ok(Some(Publish {
             topic: a.topic.clone(),
             payload,
             qos: if a.qos >= 0 { a.qos } else { publish_qos },
             retain: if a.retain >= 0 { a.retain != 0 } else { publish_retain },
-        })
+        }))
     }
 }
 
@@ -958,18 +1091,18 @@ mod tests {
         r.add("p:d;json=v", true, false, 1).unwrap();
         r.add("p:$spb/G/N;metric=m", false, false, 1).unwrap();
 
-        let p = r.write("p:out", b"21.5", FLOAT, 0, 0, 1, true).unwrap();
+        let p = r.write("p:out", b"21.5", FLOAT, 0, 0, 1, true).unwrap().unwrap();
         assert_eq!(p, Publish { topic: "out".into(), payload: b"21.5".to_vec(), qos: 1, retain: true });
-        let p = r.write("p:out;qos=2;retain=0", b"x", STRING, 0, 0, 1, true).unwrap();
+        let p = r.write("p:out;qos=2;retain=0", b"x", STRING, 0, 0, 1, true).unwrap().unwrap();
         assert_eq!((p.qos, p.retain), (2, false));
 
-        let p = r.write("p:j;json=data.v;ts=data.t", b"21.5", FLOAT, 1700000000123, 0, 0, false).unwrap();
+        let p = r.write("p:j;json=data.v;ts=data.t", b"21.5", FLOAT, 1700000000123, 0, 0, false).unwrap().unwrap();
         assert_eq!(String::from_utf8(p.payload).unwrap(), r#"{"data":{"v":21.5,"t":"2023-11-14T22:13:20.123Z"}}"#);
-        let p = r.write("p:j2;json", b"a\"b", STRING, 0, 0, 0, false).unwrap();
+        let p = r.write("p:j2;json", b"a\"b", STRING, 0, 0, 0, false).unwrap().unwrap();
         assert_eq!(p.payload, br#""a\"b""#);
-        assert_eq!(r.write("p:j2;json", b"\x01", BLOB, 0, 0, 0, false).unwrap().payload, br#""\u0001""#);
+        assert_eq!(r.write("p:j2;json", b"\x01", BLOB, 0, 0, 0, false).unwrap().unwrap().payload, br#""\u0001""#);
         // dyn: the transformation's JSON array as it is
-        assert_eq!(r.write("p:d;json=v", b"[\"a\",1]", STRING, 0, 0, 0, false).unwrap().payload, br#"{"v":["a",1]}"#);
+        assert_eq!(r.write("p:d;json=v", b"[\"a\",1]", STRING, 0, 0, 0, false).unwrap().unwrap().payload, br#"{"v":["a",1]}"#);
 
         for (a, msg) in [
             ("p:$state", "address 'p:$state' cannot be written"),
@@ -979,6 +1112,81 @@ mod tests {
         ] {
             assert_eq!(r.write(a, b"1", FLOAT, 0, 0, 1, false).unwrap_err(), msg);
         }
+    }
+
+    #[test]
+    fn merged_writes() {
+        use crate::values::types::{FLOAT, STRING};
+        let mut r = Router::new();
+        let (t, p, m) = ("p:s;json=temp;merge", "p:s;json=data.p;ts=data.t;merge", "p:s;json=mode;merge");
+        for a in [t, p, m, "p:s;json=other"] {
+            r.add(a, false, false, 1).unwrap();
+        }
+        // nothing written: nothing to publish
+        assert!(r.flush(1, false).publish.is_empty());
+
+        assert_eq!(r.write(t, b"21.5", FLOAT, 0, 0, 1, false), Ok(None));
+        assert_eq!(r.write(p, b"3", FLOAT, 1700000000123, 0, 1, false), Ok(None));
+        // a plain address on the same topic still publishes on its own
+        assert_eq!(r.write("p:s;json=other", b"1", FLOAT, 0, 0, 1, false).unwrap().unwrap().payload, br#"{"other":1}"#);
+        let o = r.flush(2, true);
+        assert_eq!(o.publish.len(), 1);
+        let x = &o.publish[0];
+        assert_eq!((x.topic.as_str(), x.qos, x.retain), ("s", 2, true));
+        // in the order of the addresses; mode is not written yet
+        assert_eq!(String::from_utf8_lossy(&x.payload), r#"{"temp":21.5,"data":{"p":3,"t":"2023-11-14T22:13:20.123Z"}}"#);
+        assert!(r.flush(2, true).publish.is_empty());
+
+        // one change: the whole document with the last values
+        r.write(m, b"auto", STRING, 0, 0, 1, false).unwrap();
+        r.write(m, b"manual", STRING, 0, 0, 1, false).unwrap();
+        let o = r.flush(1, false);
+        assert_eq!(o.publish.len(), 1);
+        assert_eq!(
+            String::from_utf8_lossy(&o.publish[0].payload),
+            r#"{"temp":21.5,"data":{"p":3,"t":"2023-11-14T22:13:20.123Z"},"mode":"manual"}"#
+        );
+
+        // a removed member leaves the document; the last one ends the group
+        r.remove(t, false);
+        r.write(m, b"x", STRING, 0, 0, 1, false).unwrap();
+        assert_eq!(String::from_utf8_lossy(&r.flush(1, false).publish[0].payload), r#"{"data":{"p":3,"t":"2023-11-14T22:13:20.123Z"},"mode":"x"}"#);
+        r.remove(p, false);
+        r.remove(m, false);
+        assert!(r.merge.is_empty());
+        // re-added: starts without values
+        r.add(m, false, false, 1).unwrap();
+        assert!(r.flush(1, false).publish.is_empty());
+    }
+
+    #[test]
+    fn merge_groups_are_checked() {
+        let mut r = Router::new();
+        r.add("p:s;json=a.b;merge", false, false, 1).unwrap();
+        r.add("p:s;json=a.c;ts=t;merge", false, false, 1).unwrap();
+        // the same address twice (two DPEs): one member
+        r.add("p:s;json=a.b;merge", false, false, 1).unwrap();
+        assert_eq!(r.merge["s"].members.len(), 2);
+        for (a, msg) in [
+            ("p:s;json=a;merge", "collide"),
+            ("p:s;json=x;ts=a.b.c;merge", "collide"),
+            ("p:s;json=t;merge", "collide"),
+            ("p:s;json=x;qos=1;merge", "same qos= and retain="),
+            ("p:s;json=x;retain;merge", "same qos= and retain="),
+        ] {
+            let err = r.add(a, false, false, 1).unwrap_err();
+            assert!(err.contains(msg), "{a}: {err}");
+            assert!(!r.addresses.contains_key(a), "{a}");
+        }
+        // other topics are other groups
+        r.add("p:s2;json=a;qos=1;merge", false, false, 1).unwrap();
+        r.add("p:s;json=x;merge", false, false, 1).unwrap();
+        assert_eq!(r.merge["s"].members.len(), 3);
+        // one DPE of two removed: still a member
+        r.remove("p:s;json=a.b;merge", false);
+        assert_eq!(r.merge["s"].members.len(), 3);
+        r.remove("p:s;json=a.b;merge", false);
+        assert_eq!(r.merge["s"].members.len(), 2);
     }
 
     // counts the allocations of the current thread (the whole test binary
@@ -1114,7 +1322,7 @@ mod tests {
         );
         assert_eq!((o.deliveries[0].time_ms, o.deliveries[0].periph_time, o.deliveries[0].validity), (Some(1700000000000), true, Validity::Valid));
         assert!(r.connected("", 0).deliveries.is_empty());
-        let cmd = r.write("p:$spb/G/N;metric=temp;qos=1", b"3", 1006, 0, 5, 1, true).unwrap();
+        let cmd = r.write("p:$spb/G/N;metric=temp;qos=1", b"3", 1006, 0, 5, 1, true).unwrap().unwrap();
         assert_eq!((cmd.topic.as_str(), cmd.qos, cmd.retain), ("spBv1.0/G/NCMD/N", 0, false));
         assert_eq!(r.write("p:$spb/G/N;online", b"1", 1007, 0, 5, 1, true).unwrap_err(), "address 'p:$spb/G/N;online': cannot be written");
 

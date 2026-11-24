@@ -35,6 +35,8 @@ class RsMqttHWService : public HWService
     /// messages to publish, values for the addresses (`payload`: the message
     /// for deliveries without a value of their own).
     void apply(RsMqttConnection &conn, const rsmqtt::wincc::Router::Outcome &out, std::string_view payload = {});
+    /// Publishes the documents of the merge addresses written since the last call.
+    void flushMerged(RsMqttConnection &conn);
     void deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload, int qos,
                         bool retained);
     // Sparkplug B host application

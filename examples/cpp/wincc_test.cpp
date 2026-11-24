@@ -173,7 +173,17 @@ int main()
     CHECK(!r.write("p:$spb/G/N;online", "1", 1007, 0, 0, 1, false, wr, err) && err == "address 'p:$spb/G/N;online': cannot be written");
     CHECK(r.add("p:out;json=v", false, false, 1, filter, err) == R::Added::Nothing);
     CHECK(r.write("p:out;json=v", std::string("a\0b", 3), 1001, 0, 0, 2, true, wr, err) && wr.topic == "out" &&
-          wr.payload == R"({"v":"a\u0000b"})" && wr.qos == 2 && wr.retain);
+          wr.payload == R"({"v":"a\u0000b"})" && wr.qos == 2 && wr.retain && !wr.deferred);
+    // merge: written values wait for flush(), one document per topic
+    CHECK(r.add("p:m;json=a;merge", false, false, 1, filter, err) == R::Added::Nothing);
+    CHECK(r.add("p:m;json=b;merge", false, false, 1, filter, err) == R::Added::Nothing);
+    CHECK(r.add("p:m;json=a.x;merge", false, false, 1, filter, err) == R::Added::Error && err.find("collide") != std::string::npos);
+    CHECK(r.write("p:m;json=a;merge", "1", 1006, 0, 0, 1, false, wr, err) && wr.deferred && wr.topic.empty());
+    CHECK(r.write("p:m;json=b;merge", "x", 1001, 0, 0, 1, false, wr, err) && wr.deferred);
+    const R::Outcome &f = r.flush(1, true);
+    CHECK(f.publish.size() == 1 && std::string(f.publish[0].topic) == "m" && f.publish[0].payload == R"({"a":1,"b":"x"})" &&
+          f.publish[0].qos == 1 && f.publish[0].retain);
+    CHECK(r.flush(1, true).publish.empty());
     CHECK(!r.remove("p:s/+", true, filter) && r.remove("p:s/+;json=v;ts=t", true, filter) && filter == "s/+");
   }
 

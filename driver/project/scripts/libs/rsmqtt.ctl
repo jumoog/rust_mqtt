@@ -485,7 +485,8 @@ string rsmqttConnStateText(int state)
 /** Builds an address reference.
   @param qos       -1 = broker default
   @param retain    -1 = broker default, 0, 1
-  @param extra     further options, e.g. "nolocal;rh=1"
+  @param extra     further options, e.g. "nolocal;rh=1", or "merge" (with json and a path: the
+                   outputs with merge on one topic publish one JSON document)
   @param json      the payload is JSON
   @param jsonPath  where the value is, e.g. "data.temp" or "values[0]"; "" = the whole payload
   @param tsPath    with json: where the timestamp is, e.g. "data.time"; "" = none
@@ -557,7 +558,7 @@ bool rsmqttParseReference(string ref, string &broker, string &topic, int &qos, i
 
 /** Sets the driver and peripheral address configs of a DPE.
   @param dpe        datapoint element, e.g. "Pump1.temperature"
-  @param reference  "<broker>:<topic>[;qos=N][;retain][;nolocal][;rap][;rh=N][;json[=path]][;ts=path]"
+  @param reference  "<broker>:<topic>[;qos=N][;retain][;nolocal][;rap][;rh=N][;json[=path]][;ts=path][;merge]"
   @param datatype   RSMQTT_STRING .. RSMQTT_BLOB; for a dyn element the type of its items,
                     the payload is then a JSON array (dyn_blob: of base64 strings)
   @param direction  RSMQTT_IN, RSMQTT_OUT or RSMQTT_IO

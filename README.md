@@ -181,7 +181,7 @@ rsmqttSetAddress("Pump1.hum",      "plant:line1/pump1;json=data.hum;ts=data.time
 
 ### Address syntax
 
-`<broker>:<topic>[;qos=0|1|2][;retain[=0|1]][;nolocal][;rap][;rh=0|1|2][;json[=<path>]][;ts=<path>]`
+`<broker>:<topic>[;qos=0|1|2][;retain[=0|1]][;nolocal][;rap][;rh=0|1|2][;json[=<path>]][;ts=<path>][;merge]`
 
 `<broker>:$spb/<group>/<edge node>[/<device>];metric=<name>|;online` (Sparkplug B, see below)
 
@@ -203,8 +203,27 @@ rsmqttSetAddress("Pump1.hum",      "plant:line1/pump1;json=data.hum;ts=data.time
 | `$.data.temp` | a leading `$` (JSONPath style) is optional |
 
 - Input: several DPEs can read one topic, each with its own path. The driver reads a message once for all `json=` and `ts=` paths of its topic, so many addresses on one message cost little more than one (1000 addresses on a 64 KB message: about 0.16 ms per message). Strings are unescaped, numbers and `true`/`false` are converted to the data type, objects and arrays reach a string DPE as JSON text. A payload that is not JSON or has nothing at the path leaves the DPE unchanged and is logged once until a payload fits again; `null` leaves it unchanged too.
-- Output: the value is published nested along its path. Numbers and bool become JSON numbers and `true`/`false`, string and blob DPEs JSON strings: `json=data.value` publishes `{"data":{"value":12.5}}`, `json=values[1]` publishes `{"values":[null,true]}`. Each DPE publishes its own message.
+- Output: the value is published nested along its path. Numbers and bool become JSON numbers and `true`/`false`, string and blob DPEs JSON strings: `json=data.value` publishes `{"data":{"value":12.5}}`, `json=values[1]` publishes `{"values":[null,true]}`. Each DPE publishes its own message, unless it has `merge` (below).
 - `ts=<path>` adds the timestamp. Input: the value at that path becomes the source time (`_original.._stime`); ISO 8601 (`2026-11-23T10:00:00.123Z`, `+01:00`; without an offset UTC) or a number of seconds since 1970 (milliseconds when it is 1e11 or more). Output: the DPE's time is added as ISO 8601 in UTC, e.g. `json=data.value;ts=data.time` publishes `{"data":{"value":12.5,"time":"2026-11-23T10:00:00.123Z"}}`. WinCC OA never stamps a value earlier than the current value of the DPE, so an older source time is moved up to that time.
+
+#### Several DPEs in one message (`merge`)
+
+Output addresses with `merge` on the same topic of a broker publish one JSON document together:
+
+```
+plant:line1/status;json=temp;ts=time;merge
+plant:line1/status;json=info.mode;merge
+plant:line1/status;json=info.on;merge
+```
+
+publish `{"temp":12.5,"time":"2026-11-24T10:00:00.123Z","info":{"mode":"auto","on":true}}`.
+
+- The driver collects the writes of one round of its work loop and then publishes each changed document once, so a `dpSet` of several DPEs gives one message. Every message holds the last value of every member, also when only one of them changed; a member that has not been written since the driver started (or since its address was set) is left out.
+- Members are written into the document in the order the driver received their addresses.
+- An address is refused if its `json=` / `ts=` paths collide with those of another member (one the parent of the other, or a level used as object and as array), and if its `qos=` / `retain=` differ from the other members' (leave them out for the broker defaults, or give all members the same).
+- `merge` needs `json=<path>` with a path and a topic without wildcards; it does not apply to `$state`, `$spb` and `$share/` topics. Addresses without `merge` on the same topic still publish on their own. An input/output address with `merge` reads its value at its path from the documents it receives, as any `json=` input does.
+- In the address panel, enter `merge` in the options field.
+- Redundancy: the passive host does not see the writes, so after a switchover the new active host publishes documents that hold only the members written since then.
 
 ### Data types (`_address.._datatype`)
 
@@ -366,6 +385,7 @@ anytype res; evalScript(res, src, makeDynString(), "tls"); return res;
 | `dyn` | dyn_float / int / long / string / bool from JSON arrays and single values, `[]`, bad items, arrays at a JSON path, JSON array output; dyn_blob as base64 arrays and strings (also at a JSON path), raw payloads and output |
 | `json` | `json=` paths (nested, array, quoted name, whole payload), string escapes, objects as text, `ts=` as ISO 8601 and epoch ms, non-JSON payloads, JSON output with timestamp |
 | `payload` | plain string (1 to `maxPayload` characters) and blob outputs of many sizes published intact, a string above `maxPayload` refused |
+| `merge` | `merge` outputs: three DPEs in one `dpSet` give one document, a single change publishes the whole document again |
 | `session` | clean session / clean start with and without session expiry |
 | `buffer` | keep alive detects a hung broker, automatic reconnect, `maxBufferedMessages` + `deleteOldestMessages` |
 | `will_arm`, `will_check` | will with retain, QoS 1 and v5 properties; kill `WCCOArsmqtt` between the two |

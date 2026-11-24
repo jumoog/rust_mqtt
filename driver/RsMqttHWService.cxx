@@ -147,6 +147,7 @@ void RsMqttHWService::stop()
   for (auto &c : conns)
   {
     if ( !c->client ) continue;
+    flushMerged(*c);
     sparkplugGoodbye(*c);
     try
     {
@@ -306,6 +307,10 @@ void RsMqttHWService::workProc()
   auto now = Clock::now();
   for (auto &c : RsMqttConnections::instance().all())
   {
+    // the merge addresses written since the last round: one document per topic
+    // (before a reconfiguration replaces the client they were written to)
+    flushMerged(*c);
+
     if ( (c->dirty && now - c->dirtySince >= RECONFIGURE_DELAY) || c->reconnectRequested )
       reconfigure(*c);
 
@@ -532,6 +537,25 @@ void RsMqttHWService::apply(RsMqttConnection &conn, const rsmqtt::wincc::Router:
             d.validity);
 }
 
+void RsMqttHWService::flushMerged(RsMqttConnection &conn)
+{
+  const auto &out = conn.router.flush(conn.settings.publishQoS(), conn.settings.publishRetain());
+  for (const auto &w : out.warnings)
+    log(ErrClass::PRIO_WARNING, "writeData", "[" + conn.name + "] " + w.second);
+  std::string err;
+  for (const auto &p : out.publish)
+  {
+    // each member passed toPeriph's limit, the document as a whole may not
+    if ( p.payload.size() > RsMqttResources::getMaxPayload() )
+      log(ErrClass::PRIO_WARNING, "writeData", "[" + conn.name + "] merged document for '" + std::string(p.topic) +
+          "' not published: " + std::to_string(p.payload.size()) + " bytes exceed maxPayload " +
+          std::to_string(RsMqttResources::getMaxPayload()));
+    else if ( !conn.publish(p.topic, p.payload, p.qos, p.retain, err) )
+      log(ErrClass::PRIO_WARNING, "writeData",
+          "[" + conn.name + "] publish to '" + std::string(p.topic) + "' failed: " + err);
+  }
+}
+
 void RsMqttHWService::deliverMessage(RsMqttConnection &conn, const std::string &topic, std::string_view payload,
                                      int qos, bool retained)
 {
@@ -644,6 +668,10 @@ PVSSboolean RsMqttHWService::writeData(HWObject *objPtr)
 
   if ( !addr->sparkplug && Resources::isDbgFlag(Resources::DBG_DRV_USR1) )
     objPtr->debugPrint();
+
+  // merge: published with the other values of its topic by flushMerged (workProc)
+  if ( w.deferred )
+    return PVSS_TRUE;
 
   if ( !conn->publish(w.topic, w.payload, w.qos, w.retain, err) )
   {

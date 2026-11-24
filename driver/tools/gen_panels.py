@@ -490,8 +490,8 @@ def address_panel():
             "Input: the topic may contain + and #, $share/<group>/... for shared subscriptions.",
             bold=False)
     p.label("lblHint2", 20, 336, 580,
-            "Topic $state = Verbindungszustand (1/0).  Optionen: nolocal; rap; rh=0|1|2",
-            "Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2",
+            "Topic $state = Verbindungszustand (1/0).  Optionen: nolocal; rap; rh=0|1|2; merge",
+            "Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2; merge",
             bold=False)
     p.label("lblHint3", 20, 354, 580,
             "JSON-Pfad z.B. data.temp, values[0], ['a.b']; leer = ganze Nutzdaten.",

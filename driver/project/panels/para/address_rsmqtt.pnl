@@ -416,9 +416,9 @@ LANG:10000 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10001 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 LANG:10027 39 Arial,-1,13,5,400,0,0,0,0,0,0,0,0,0,0,1
 0 3
-LANG:10000 74 Topic $state = Verbindungszustand (1/0).  Optionen: nolocal; rap; rh=0|1|2
-LANG:10001 71 Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2
-LANG:10027 71 Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2
+LANG:10000 81 Topic $state = Verbindungszustand (1/0).  Optionen: nolocal; rap; rh=0|1|2; merge
+LANG:10001 78 Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2; merge
+LANG:10027 78 Topic $state = connection state (1/0).  Options: nolocal; rap; rh=0|1|2; merge
 2 113
 "lblHint3"
 ""

@@ -1254,12 +1254,20 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_warning_get(r: *const RsmqttWinccRo
     w.as_ptr()
 }
 
+/// The documents of the `merge` groups written since the last call, as
+/// publishes (errors as warnings); call it after a batch of writes.
+#[no_mangle]
+pub unsafe extern "C" fn rsmqtt_wincc_router_flush(r: *mut RsmqttWinccRouter, publish_qos: c_int, publish_retain: c_int) {
+    router_call(r, |r, out| r.flush_into(publish_qos, publish_retain != 0, out))
+}
+
 /// The message that writes `value` (payload text of data type `value_type`)
-/// to an output address: 0 and topic / payload / QoS / retain, or -1 and
-/// rsmqtt_wincc_last_error() (the message for the log).
+/// to an output address: 0 and topic / payload / QoS / retain; 1 for a
+/// `merge` address (the value waits for rsmqtt_wincc_router_flush); or -1
+/// and rsmqtt_wincc_last_error() (the message for the log).
 #[no_mangle]
 pub unsafe extern "C" fn rsmqtt_wincc_router_write(
-    r: *const RsmqttWinccRouter,
+    r: *mut RsmqttWinccRouter,
     full: *const c_char,
     value: *const c_char,
     len: usize,
@@ -1274,8 +1282,11 @@ pub unsafe extern "C" fn rsmqtt_wincc_router_write(
     retain: *mut c_int,
 ) -> c_int {
     guard(-1, || {
-        let r = r.as_ref().ok_or("null router")?;
-        let p = r.r.write(&text(full), bytes(value, len), value_type, time_ms, now_ms, publish_qos, publish_retain != 0)?;
+        let r = r.as_mut().ok_or("null router")?;
+        let Some(p) = r.r.write(&text(full), bytes(value, len), value_type, time_ms, now_ms, publish_qos, publish_retain != 0)?
+        else {
+            return Ok(1);
+        };
         if let Some(q) = qos.as_mut() {
             *q = p.qos;
         }

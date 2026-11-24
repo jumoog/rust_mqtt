@@ -795,26 +795,43 @@ namespace rsmqtt::wincc
         std::string payload;
         int         qos = 0;
         bool        retain = false;
+        bool        deferred = false;  // a merge address: published by flush()
       };
 
       /// The message that writes `value` (payload text of data type valueType)
       /// to an output address; false and `err` (for the log) if it cannot be written.
       bool write(const std::string &fullAddress, std::string_view value, int valueType, int64_t timeMs, int64_t nowMs,
-                 int publishQoS, bool publishRetain, Write &out, std::string &err) const
+                 int publishQoS, bool publishRetain, Write &out, std::string &err)
       {
         rsmqtt_wincc_buf t{}, p{};
         int qos = 0, retain = 0;
-        if ( rsmqtt_wincc_router_write(r, fullAddress.c_str(), value.data(), value.size(), valueType, timeMs, nowMs,
-                                       publishQoS, publishRetain, &t, &p, &qos, &retain) != 0 )
+        int rc = rsmqtt_wincc_router_write(r, fullAddress.c_str(), value.data(), value.size(), valueType, timeMs, nowMs,
+                                           publishQoS, publishRetain, &t, &p, &qos, &retain);
+        if ( rc < 0 )
         {
           err = lastError();
           return false;
+        }
+        out.deferred = rc == 1;
+        if ( out.deferred )
+        {
+          out.topic.clear();
+          out.payload.clear();
+          return true;
         }
         out.topic = take(t);
         out.payload = take(p);
         out.qos = qos;
         out.retain = retain != 0;
         return true;
+      }
+
+      /// The documents of the merge groups written since the last call
+      /// (publish; errors in warnings); call it after a batch of writes.
+      const Outcome &flush(int publishQoS, bool publishRetain)
+      {
+        rsmqtt_wincc_router_flush(r, publishQoS, publishRetain);
+        return collect();
       }
 
     private:

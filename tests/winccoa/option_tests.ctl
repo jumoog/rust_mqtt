@@ -12,7 +12,7 @@
 //   string src; fileToString("<repo>/tests/winccoa/option_tests.ctl", src);
 //   anytype res; evalScript(res, src, makeDynString(), "transport");
 //
-// Groups: transport, auth, tls, ws, connect, v5, session, buffer, json, payload, dyn,
+// Groups: transport, auth, tls, ws, connect, v5, session, buffer, json, payload, merge, dyn,
 //         redu, spb, will_arm / will_check, persist_arm / persist_check,
 //         host2_prepare / host2 / host2_check (see host2_prepare)
 
@@ -561,6 +561,17 @@ string utc(time t)
   return formatTimeUTC("%Y-%m-%dT%H:%M:%S", t) + "." + ms + "Z";
 }
 
+/** TRUE if `got` is before + <time> + after, with <time> the DPE's stored time `t` or
+    up to 50 ms earlier: the driver publishes the time it gets with the value, and the
+    event manager may store a slightly later one (it moves a time up that is not
+    newer than the current value's). */
+bool withTime(string got, string before, time t, string after)
+{
+  for (int k = 0; k <= 50; k++)
+    if ( got == before + utc(t - k * 0.001) + after ) return TRUE;
+  return FALSE;
+}
+
 void ensureJsonDp()
 {
   if ( dynlen(dpTypes("RsMqttJsonT")) == 0 )
@@ -654,7 +665,8 @@ void json()
   string of = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/of.txt");
   string os = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/os.txt");
   string ob = sh("docker exec " + BROKER_CONTAINER + " cat /tmp/ob.txt");
-  result("output json=data.value;ts=data.time", of == "{\"data\":{\"value\":12.5,\"time\":\"" + utc(tOut) + "\"}}", of);
+  result("output json=data.value;ts=data.time", withTime(of, "{\"data\":{\"value\":12.5,\"time\":\"", tOut, "\"}}"),
+         of + " (DPE time " + utc(tOut) + ")");
   result("output json=msg (string escaped)", os == "{\"msg\":\"say \\\"hi\\\" a\\\\b\"}", os);
   result("output json=values[1] (bool)", ob == "{\"values\":[null,true]}", ob);
 
@@ -746,6 +758,43 @@ void payload()
   result("  ... the next value is published", after == "after", after);
 
   dyn_string outs = makeDynString("s", "b");
+  for (int i = 1; i <= dynlen(outs); i++) dpSetWait(d + outs[i] + ":_address.._type", 0, d + outs[i] + ":_distrib.._type", 0);
+  cleanup();
+}
+
+/** merge: the output DPEs of one topic publish one JSON document. */
+void merge()
+{
+  ensureJsonDp();
+  string d = "RsMqttJson1.";
+  string topic = "opt/" + rnd(3) + "/merge";
+  broker("o_merge", makeMapping("ServerURI", "tcp://localhost:18840"));
+  waitState("o_merge", 3, 8);
+
+  dyn_string outs = makeDynString("outF", "outS", "outB");
+  setAddr(d + "outF", "o_merge:" + topic + ";json=temp;ts=time;merge", 2, 1006);
+  setAddr(d + "outS", "o_merge:" + topic + ";json=info.mode;merge", 2, 1001);
+  setAddr(d + "outB", "o_merge:" + topic + ";json=info.on;merge", 2, 1007);
+  delay(1);
+  sh("docker exec -d " + BROKER_CONTAINER + " sh -c \"mosquitto_sub -p 1883 -t " + topic + " -C 3 -W 5 > /tmp/merge.txt\"");
+  delay(1);
+
+  // one dpSet of three DPEs: one message
+  dpSetWait(d + "outF", 12.5, d + "outS", "auto", d + "outB", TRUE);
+  delay(1);
+  time t1; dpGet(d + "outF:_original.._stime", t1);
+  // one DPE changes: the whole document again, with the last values of the others
+  dpSetWait(d + "outS", "manual");
+  delay(4);
+  dyn_string got = strsplit(sh("docker exec " + BROKER_CONTAINER + " cat /tmp/merge.txt"), "\n");
+  string first = dynlen(got) >= 1 ? got[1] : "", second = dynlen(got) >= 2 ? got[2] : "";
+  string pre = "{\"temp\":12.5,\"time\":\"";
+  result("merge: 3 DPEs in one dpSet -> 1 message", withTime(first, pre, t1, "\",\"info\":{\"mode\":\"auto\",\"on\":true}}"),
+         first + " (DPE time " + utc(t1) + ")");
+  result("merge: 1 DPE changes -> whole document", withTime(second, pre, t1, "\",\"info\":{\"mode\":\"manual\",\"on\":true}}"),
+         second + " (DPE time " + utc(t1) + ")");
+  result("merge: no further messages", dynlen(got) == 2, dynlen(got) + " messages");
+
   for (int i = 1; i <= dynlen(outs); i++) dpSetWait(d + outs[i] + ":_address.._type", 0, d + outs[i] + ":_distrib.._type", 0);
   cleanup();
 }
@@ -1224,6 +1273,10 @@ void host2_check()
 
 dyn_string main(string group)
 {
+  // a new manager starts rand() at the same seed: client ids would repeat
+  // those of brokers left by an earlier run (":keep") and take over their sessions
+  time now = getCurrentTime();
+  srand(period(now) % 1000000 * 1000 + milliSecond(now));   // stays within a 32-bit int
   gKeep = strpos(group, ":keep") > 0;
   strreplace(group, ":keep", "");
   ensureTestDp();
@@ -1238,6 +1291,7 @@ dyn_string main(string group)
     case "session":       session(); break;
     case "json":          json(); break;
     case "payload":       payload(); break;
+    case "merge":         merge(); break;
     case "dyn":           dynTypes(); break;
     case "redu":          redu(); break;
     case "spb":           sparkplug(); break;
